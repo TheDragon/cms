@@ -15,7 +15,7 @@ export default function App() {
         <div className="topbar-inner">
           <div className="brand">
             <span className="dot" />
-            <span>ABC Credentials</span>
+            <span>ABC Certificates</span>
             <span className="badge">Sui</span>
           </div>
 
@@ -25,10 +25,10 @@ export default function App() {
                 Issue
               </button>
               <button className={`tab ${tab === "verify" ? "active" : ""}`} onClick={() => setTab("verify")}>
-                Recruiter Verify
+                Verify
               </button>
               <button className={`tab ${tab === "revoke" ? "active" : ""}`} onClick={() => setTab("revoke")}>
-                Revocations
+                Revoke
               </button>
             </div>
             <ConnectButton />
