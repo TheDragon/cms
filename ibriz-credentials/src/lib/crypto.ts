@@ -53,7 +53,7 @@ export async function encryptWithPassphrase(
   iterations: number
 ): Promise<ArrayBuffer> {
   const key = await deriveKey(passphrase, salt, iterations);
-  return crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+  return crypto.subtle.encrypt({ name: "AES-GCM", iv: toArrayBuffer(iv) }, key, plaintext);
 }
 
 export async function decryptWithPassphrase(
@@ -64,5 +64,5 @@ export async function decryptWithPassphrase(
   iterations: number
 ): Promise<ArrayBuffer> {
   const key = await deriveKey(passphrase, salt, iterations);
-  return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+  return crypto.subtle.decrypt({ name: "AES-GCM", iv: toArrayBuffer(iv) }, key, ciphertext);
 }
