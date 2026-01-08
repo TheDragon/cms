@@ -23,6 +23,7 @@ export default function Issue() {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const [localRegistry, setLocalRegistry] = useState(() => getRegistryId());
+  const [activeStep, setActiveStep] = useState<1 | 2 | 3>(1);
 
   const [ctxTitle, setCtxTitle] = useState("ABC Certificate Batch");
   const [ctxDesc, setCtxDesc] = useState("Issued by iBriz");
@@ -61,6 +62,21 @@ export default function Issue() {
 
   const isIssuer = !!issuerCapId;
   const passphraseReady = passphrase.length >= 8 && passphrase === confirmPassphrase;
+  const adminReady = isIssuer && !!localRegistry;
+  const batchReady = !!contextId;
+  const issueReady = adminReady && batchReady && recipient.startsWith("0x");
+  const step2Enabled = adminReady;
+  const step3Enabled = adminReady && batchReady;
+
+  async function copyToClipboard(label: string, value: string) {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setMsg(`${label} copied.`);
+    } catch {
+      setMsg(`Unable to copy ${label.toLowerCase()}. Please select and copy it.`);
+    }
+  }
 
   async function createIssuer() {
     if (!account) return;
@@ -334,157 +350,272 @@ export default function Issue() {
   return (
     <div className="card">
       <h2 style={{ marginTop: 0 }}>Issue Certificates (Admin)</h2>
+      <p className="small">Follow the steps below. Only admins can issue certificates.</p>
 
       {!account ? (
-        <p className="small">Connect your wallet to issue certificates.</p>
+        <p className="small">Connect your wallet to get started.</p>
       ) : (
         <p className="small">
           Connected wallet: <span className="badge">{account.address}</span>
         </p>
       )}
 
-      <div className="row" style={{ marginTop: 12 }}>
-        <div className="card" style={{ flex: 1 }}>
-          <h3 style={{ marginTop: 0 }}>Admin setup</h3>
-          <p className="small">Admin access detected: {isIssuer ? <span className="badge ok">Yes</span> : <span className="badge bad">No</span>}</p>
-
-          {!isIssuer && (
-            <button className="btn" disabled={!account || isPending} onClick={createIssuer}>
-              Set up admin access (one-time)
-            </button>
-          )}
-          {isIssuer && (
-            <div style={{ marginTop: 8 }}>
-              <button className="btn" disabled={!account || isPending} onClick={createIssuer}>
-                Create a new registry anyway
-              </button>
-              <p className="small">This creates a new admin key and a new shared list for this wallet.</p>
-            </div>
-          )}
-
-          <div style={{ marginTop: 12 }}>
-            <label className="small">Registry ID (shared list)</label>
-            <input
-              value={localRegistry}
-              onChange={(e) => {
-                setLocalRegistry(e.target.value);
-                setRegistryId(e.target.value);
-              }}
-              placeholder="0x... registry id"
-            />
-            <p className="small">
-              Current registry ID: {localRegistry ? <span className="badge">{localRegistry}</span> : <span className="badge">not set</span>}
-            </p>
-            <p className="small">Tip: after setup, we save this in your browser.</p>
-          </div>
+      <div className="steps-progress" style={{ marginTop: 12 }}>
+        <div className={`step-chip ${adminReady ? "done" : ""}`}>
+          <span className="step-index">1</span>
+          <span>Admin</span>
         </div>
-
-        <div className="card" style={{ flex: 1 }}>
-          <h3 style={{ marginTop: 0 }}>Batch / Event</h3>
-          <label className="small">Title</label>
-          <input value={ctxTitle} onChange={(e) => setCtxTitle(e.target.value)} />
-          <label className="small" style={{ marginTop: 8, display: "block" }}>
-            Description
-          </label>
-          <input value={ctxDesc} onChange={(e) => setCtxDesc(e.target.value)} />
-
-          <button className="btn" style={{ marginTop: 12 }} disabled={!account || !isIssuer || isPending} onClick={createContext}>
-            Create Batch
-          </button>
-
-          <div style={{ marginTop: 12 }}>
-            <label className="small">Batch ID</label>
-            <input value={contextId} onChange={(e) => setContextId(e.target.value)} placeholder="0x... batch id" />
-            <p className="small">
-              Current batch ID: {contextId ? <span className="badge">{contextId}</span> : <span className="badge">not set</span>}
-            </p>
-          </div>
+        <div className={`step-chip ${batchReady ? "done" : ""}`}>
+          <span className="step-index">2</span>
+          <span>Batch</span>
+        </div>
+        <div className={`step-chip ${issueReady ? "done" : ""}`}>
+          <span className="step-index">3</span>
+          <span>Issue</span>
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Issue Certificate</h3>
-        <div className="row">
-          <div>
-            <label className="small">Recipient wallet address</label>
-            <input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="0x... recipient wallet" />
-          </div>
-          <div>
-            <label className="small">Certificate title</label>
-            <input value={credTitle} onChange={(e) => setCredTitle(e.target.value)} />
-          </div>
-        </div>
+      <div className="step-tabs" style={{ marginTop: 12 }}>
+        <button type="button" className={`step-tab ${activeStep === 1 ? "active" : ""}`} onClick={() => setActiveStep(1)}>
+          Step 1: Admin
+        </button>
+        <button
+          type="button"
+          className={`step-tab ${activeStep === 2 ? "active" : ""}`}
+          disabled={!step2Enabled}
+          onClick={() => setActiveStep(2)}
+        >
+          Step 2: Batch
+        </button>
+        <button
+          type="button"
+          className={`step-tab ${activeStep === 3 ? "active" : ""}`}
+          disabled={!step3Enabled}
+          onClick={() => setActiveStep(3)}
+        >
+          Step 3: Issue
+        </button>
+      </div>
+      <p className="small" style={{ marginTop: 6 }}>
+        Complete each step to unlock the next.
+      </p>
 
-        <label className="small" style={{ marginTop: 8, display: "block" }}>
-          Attachment link (optional)
-        </label>
-        <input value={docRef} onChange={(e) => setDocRef(e.target.value)} placeholder="Added after upload (or paste a link)" />
-
-        <label className="small" style={{ marginTop: 12, display: "block" }}>
-          Attach file (stored on Walrus)
-        </label>
-        <input
-          type="file"
-          onChange={(e) => {
-            const file = e.target.files?.[0] || null;
-            setSelectedFile(file);
-            setUploadError("");
-            setUploadMsg("");
-          }}
-        />
-        <div style={{ marginTop: 8 }}>
-          <label className="small">Passphrase (required to open file)</label>
-          <input
-            type="password"
-            value={passphrase}
-            onChange={(e) => {
-              setPassphrase(e.target.value);
-              setUploadError("");
-              setUploadMsg("");
-            }}
-            placeholder="8+ characters"
-          />
-          <label className="small" style={{ marginTop: 8, display: "block" }}>
-            Confirm passphrase
-          </label>
-          <input
-            type="password"
-            value={confirmPassphrase}
-            onChange={(e) => {
-              setConfirmPassphrase(e.target.value);
-              setUploadError("");
-              setUploadMsg("");
-            }}
-            placeholder="Re-enter passphrase"
-          />
-          {passphrase && passphrase.length < 8 && (
-            <p className="small" style={{ marginTop: 6 }}>
-              Passphrase needs at least 8 characters.
-            </p>
-          )}
-          {passphrase && confirmPassphrase && passphrase !== confirmPassphrase && (
-            <p className="small" style={{ marginTop: 6 }}>
-              Passphrases do not match.
+      {(msg || lastTx) && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <h3 style={{ marginTop: 0 }}>Status</h3>
+          {msg && <p>{msg}</p>}
+          {lastTx && (
+            <p className="small">
+              Last transaction: <span className="badge">{lastTx}</span>
             </p>
           )}
         </div>
-        <button className="btn" style={{ marginTop: 8 }} disabled={!selectedFile || isUploading || !passphraseReady} onClick={uploadToWalrus}>
-          {isUploading ? "Uploading..." : "Encrypt and upload"}
-        </button>
-        {uploadMsg && <p className="small" style={{ marginTop: 8 }}>{uploadMsg}</p>}
-        {uploadError && <p className="small" style={{ marginTop: 8 }}>{uploadError}</p>}
+      )}
 
-        <button className="btn" style={{ marginTop: 12 }} disabled={!account || !isIssuer || isPending} onClick={issueCredential}>
-          Issue Certificate
-        </button>
+      <div className="steps" style={{ marginTop: 12 }}>
+        {activeStep === 1 && (
+          <div className="card step-card">
+            <div className="step-header">
+              <div className="step-number">1</div>
+              <div className="step-meta">
+                <h3 className="step-title">Admin setup</h3>
+                <p className="step-desc">One-time setup that enables issuing certificates.</p>
+              </div>
+              <span className={`badge ${adminReady ? "ok" : ""}`}>{adminReady ? "Ready" : "Needs setup"}</span>
+            </div>
 
-        {msg && <p style={{ marginTop: 12 }}>{msg}</p>}
-        {lastTx && (
-          <p className="small">
-            Last transaction: <span className="badge">{lastTx}</span>
-          </p>
+            <div style={{ marginTop: 12 }}>
+              {!isIssuer && (
+                <button className="btn" disabled={!account || isPending} onClick={createIssuer}>
+                  Set up admin access
+                </button>
+              )}
+              {isIssuer && (
+                <div>
+                  <button className="btn" disabled={!account || isPending} onClick={createIssuer}>
+                    Create a new registry anyway
+                  </button>
+                  <p className="small">Use this if you want a separate registry for a new organization.</p>
+                </div>
+              )}
+              {capQuery.isPending && <p className="small">Checking admin access...</p>}
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <label className="small">Registry ID (shared list)</label>
+              <input
+                value={localRegistry}
+                onChange={(e) => {
+                  setLocalRegistry(e.target.value);
+                  setRegistryId(e.target.value);
+                }}
+                placeholder="0x... registry id"
+              />
+              <p className="small">
+                Current registry ID: {localRegistry ? <span className="badge">{localRegistry}</span> : <span className="badge">not set</span>}
+              </p>
+              {localRegistry && (
+                <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Registry ID", localRegistry)}>
+                  Copy registry ID
+                </button>
+              )}
+              <p className="small">We save this in your browser after setup.</p>
+            </div>
+
+            <div className="step-actions">
+              <button className="btn" disabled={!step2Enabled} onClick={() => setActiveStep(2)}>
+                Continue to batch setup
+              </button>
+            </div>
+          </div>
         )}
-        {capQuery.isPending && <p className="small">Checking admin access...</p>}
+
+        {activeStep === 2 && (
+          <div className="card step-card">
+            <div className="step-header">
+              <div className="step-number">2</div>
+              <div className="step-meta">
+                <h3 className="step-title">Create a batch</h3>
+                <p className="step-desc">Batches group certificates for an event or course.</p>
+              </div>
+              <span className={`badge ${batchReady ? "ok" : ""}`}>{batchReady ? "Ready" : "Not set"}</span>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <label className="small">Batch title</label>
+              <input value={ctxTitle} onChange={(e) => setCtxTitle(e.target.value)} />
+              <label className="small" style={{ marginTop: 8, display: "block" }}>
+                Description
+              </label>
+              <input value={ctxDesc} onChange={(e) => setCtxDesc(e.target.value)} />
+
+              <button className="btn" style={{ marginTop: 12 }} disabled={!account || !isIssuer || isPending} onClick={createContext}>
+                Create batch
+              </button>
+
+              <div style={{ marginTop: 12 }}>
+                <label className="small">Batch ID</label>
+                <input value={contextId} onChange={(e) => setContextId(e.target.value)} placeholder="0x... batch id" />
+                <p className="small">
+                  Current batch ID: {contextId ? <span className="badge">{contextId}</span> : <span className="badge">not set</span>}
+                </p>
+                {contextId && (
+                  <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Batch ID", contextId)}>
+                    Copy batch ID
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="step-actions">
+              <button className="btn secondary" onClick={() => setActiveStep(1)}>
+                Back to admin
+              </button>
+              <button className="btn" disabled={!step3Enabled} onClick={() => setActiveStep(3)}>
+                Continue to issuing
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeStep === 3 && (
+          <div className="card step-card">
+            <div className="step-header">
+              <div className="step-number">3</div>
+              <div className="step-meta">
+                <h3 className="step-title">Issue a certificate</h3>
+                <p className="step-desc">Add the recipient and optional attachment, then issue.</p>
+              </div>
+              <span className={`badge ${issueReady ? "ok" : ""}`}>{issueReady ? "Ready" : "Waiting for details"}</span>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <div className="row">
+                <div>
+                  <label className="small">Recipient wallet address</label>
+                  <input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="0x... recipient wallet" />
+                </div>
+                <div>
+                  <label className="small">Certificate title</label>
+                  <input value={credTitle} onChange={(e) => setCredTitle(e.target.value)} />
+                </div>
+              </div>
+
+              <label className="small" style={{ marginTop: 8, display: "block" }}>
+                Attachment link (optional)
+              </label>
+              <input value={docRef} onChange={(e) => setDocRef(e.target.value)} placeholder="Added after upload (or paste a link)" />
+              <p className="small">If you upload a file, we will add the link automatically.</p>
+
+              <label className="small" style={{ marginTop: 12, display: "block" }}>
+                Attach file (stored on Walrus)
+              </label>
+              <input
+                type="file"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  setSelectedFile(file);
+                  setUploadError("");
+                  setUploadMsg("");
+                }}
+              />
+
+              <div style={{ marginTop: 8 }}>
+                <label className="small">Passphrase (required to open file)</label>
+                <input
+                  type="password"
+                  value={passphrase}
+                  onChange={(e) => {
+                    setPassphrase(e.target.value);
+                    setUploadError("");
+                    setUploadMsg("");
+                  }}
+                  placeholder="8+ characters"
+                />
+                <label className="small" style={{ marginTop: 8, display: "block" }}>
+                  Confirm passphrase
+                </label>
+                <input
+                  type="password"
+                  value={confirmPassphrase}
+                  onChange={(e) => {
+                    setConfirmPassphrase(e.target.value);
+                    setUploadError("");
+                    setUploadMsg("");
+                  }}
+                  placeholder="Re-enter passphrase"
+                />
+                <p className="small">Share the passphrase with the recipient so they can open the file.</p>
+                {passphrase && passphrase.length < 8 && (
+                  <p className="small" style={{ marginTop: 6 }}>
+                    Passphrase needs at least 8 characters.
+                  </p>
+                )}
+                {passphrase && confirmPassphrase && passphrase !== confirmPassphrase && (
+                  <p className="small" style={{ marginTop: 6 }}>
+                    Passphrases do not match.
+                  </p>
+                )}
+              </div>
+
+              <button className="btn" style={{ marginTop: 8 }} disabled={!selectedFile || isUploading || !passphraseReady} onClick={uploadToWalrus}>
+                {isUploading ? "Uploading..." : "Encrypt and upload"}
+              </button>
+              {uploadMsg && <p className="small" style={{ marginTop: 8 }}>{uploadMsg}</p>}
+              {uploadError && <p className="small" style={{ marginTop: 8 }}>{uploadError}</p>}
+
+              <div className="step-actions">
+                <button className="btn secondary" onClick={() => setActiveStep(2)}>
+                  Back to batch
+                </button>
+                <button className="btn" disabled={!issueReady || isPending} onClick={issueCredential}>
+                  Issue certificate
+                </button>
+              </div>
+              {!issueReady && <p className="small">Add a recipient address and select a batch to enable issuing.</p>}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
