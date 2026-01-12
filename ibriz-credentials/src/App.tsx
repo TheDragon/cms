@@ -23,7 +23,7 @@ export default function App() {
     const first = capQuery.data?.data?.[0];
     return !!first?.data?.objectId;
   }, [capQuery.data]);
-  const tabs = useMemo<Tab[]>(() => (isIssuer ? ["issue", "verify", "revoke"] : ["verify"]), [isIssuer]);
+  const tabs = useMemo<Tab[]>(() => (isIssuer ? ["issue", "verify", "revoke"] : ["issue", "verify"]), [isIssuer]);
 
   useEffect(() => {
     if (!tabs.includes(tab)) {
@@ -77,11 +77,9 @@ export default function App() {
         </div>
 
         <nav className="side-nav">
-          {isIssuer && (
-            <button className={`side-tab ${tab === "issue" ? "active" : ""}`} onClick={() => setTab("issue")}>
-              Issue
-            </button>
-          )}
+          <button className={`side-tab ${tab === "issue" ? "active" : ""}`} onClick={() => setTab("issue")}>
+            Issue
+          </button>
           <button className={`side-tab ${tab === "verify" ? "active" : ""}`} onClick={() => setTab("verify")}>
             My Certificates
           </button>
