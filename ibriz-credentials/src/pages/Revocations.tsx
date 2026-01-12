@@ -42,7 +42,7 @@ export default function Revocations() {
   async function revoke() {
     if (!account) return;
     if (!isIssuer) return setMsg("This wallet does not have admin access.");
-    if (!registryId) return setMsg("Please enter the registry ID.");
+    if (!registryId) return setMsg("Please enter the organization ID.");
     if (!credentialId.startsWith("0x")) return setMsg("Certificate ID must start with 0x.");
     setMsg("");
 
@@ -63,18 +63,24 @@ export default function Revocations() {
     <div className="card">
       <h2 style={{ marginTop: 0 }}>Revoke Certificates (Admin only)</h2>
 
-      {!account ? <p className="small">Connect the admin wallet to revoke certificates.</p> : <p className="small">Admin access detected: {isIssuer ? <span className="badge ok">Yes</span> : <span className="badge bad">No</span>}</p>}
+      {!account ? (
+        <p className="small">Connect the admin wallet to revoke certificates.</p>
+      ) : (
+        <p className="small">
+          Admin access detected: {isIssuer ? <span className="badge ok">Yes</span> : <span className="badge bad">No</span>}
+        </p>
+      )}
 
       <div className="row" style={{ marginTop: 12 }}>
         <div>
-          <label className="small">Registry ID (shared list)</label>
+          <label className="small">Organization ID (shared list)</label>
           <input
             value={registryId}
             onChange={(e) => {
               setRegistryId(e.target.value);
               setStoredRegistryId(e.target.value);
             }}
-            placeholder="0x... registry id"
+            placeholder="0x... organization id"
           />
         </div>
         <div>
@@ -95,10 +101,10 @@ export default function Revocations() {
       )}
 
       <div className="card" style={{ marginTop: 12 }}>
-        <h3 style={{ marginTop: 0 }}>Revoked certificates (from registry)</h3>
-        {registryQuery.isPending && <p className="small">Loading registry...</p>}
+        <h3 style={{ marginTop: 0 }}>Revoked certificates (from organization list)</h3>
+        {registryQuery.isPending && <p className="small">Loading organization list...</p>}
         {registryQuery.error && <p>Error: {String(registryQuery.error)}</p>}
-        {!registryQuery.isPending && <pre>{revoked.length ? revoked.join("\n") : "(none found or registry format changed)"}</pre>}
+        {!registryQuery.isPending && <pre>{revoked.length ? revoked.join("\n") : "(none found or list format changed)"}</pre>}
       </div>
     </div>
   );

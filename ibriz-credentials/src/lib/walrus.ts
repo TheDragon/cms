@@ -51,3 +51,17 @@ export function buildWalrusBlobUrl(base: string | undefined, ref: WalrusRef | nu
   }
   return `${baseUrl}/by-object-id/${ref.id}`;
 }
+
+export function applyWalrusMeta(ref: string, meta: Record<string, string>): string {
+  const parsed = parseWalrusRef(ref);
+  if (!parsed) return ref;
+  const merged: Record<string, string> = { ...parsed.meta };
+  for (const [key, value] of Object.entries(meta)) {
+    if (!value) continue;
+    merged[key] = value;
+  }
+  const entries = Object.entries(merged);
+  const fragment = entries.length ? entries.map(([key, value]) => `${key}=${value}`).join(";") : "";
+  const base = parsed.scheme === "walrus" ? `walrus://${parsed.id}` : `walrus-object://${parsed.id}`;
+  return fragment ? `${base}#${fragment}` : base;
+}

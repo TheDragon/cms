@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
+import type { ChangeEvent } from "react";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient, useSuiClientQuery } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
 import { MODULE, PACKAGE_ID, TYPES, WALRUS_UPLOAD_URL, getRegistryId, setRegistryId } from "../config";
-import { AES_GCM_IV_BYTES, DEFAULT_PBKDF2_ITERATIONS, SALT_BYTES, encryptWithPassphrase, toBase64Url } from "../lib/crypto";
+import { applyWalrusMeta } from "../lib/walrus";
 
 function target(fn: string) {
   return `${PACKAGE_ID}::${MODULE}::${fn}`;
@@ -19,25 +20,72 @@ function getEventField(res: unknown, eventSuffix: string, keys: string[]): strin
   return "";
 }
 
+function normalizeAddress(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function parseAddressList(input: string): { valid: string[]; invalid: string[] } {
+  const parts = input
+    .split(/[\s,;]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const validSet = new Set<string>();
+  const invalid: string[] = [];
+  for (const part of parts) {
+    if (/^0x[0-9a-fA-F]+$/.test(part)) {
+      validSet.add(normalizeAddress(part));
+    } else {
+      invalid.push(part);
+    }
+  }
+  return { valid: Array.from(validSet), invalid };
+}
+
+function extractAddresses(input: string): string[] {
+  return input.match(/0x[0-9a-fA-F]+/g) ?? [];
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (size <= 0) return [items];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function buildDocRefForRecipient(baseRef: string, extraAccess: string[]): string {
+  const trimmed = baseRef.trim();
+  if (!trimmed) return "";
+  if (!extraAccess.length) return trimmed;
+  const allowList = Array.from(new Set(extraAccess.map(normalizeAddress)));
+  if (!allowList.length) return trimmed;
+  const aclValue = encodeURIComponent(allowList.join(","));
+  return applyWalrusMeta(trimmed, { acl: aclValue });
+}
+
 export default function Issue() {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const [localRegistry, setLocalRegistry] = useState(() => getRegistryId());
   const [activeStep, setActiveStep] = useState<1 | 2 | 3>(1);
 
-  const [ctxTitle, setCtxTitle] = useState("ABC Certificate Batch");
+  const [ctxTitle, setCtxTitle] = useState("ABC Certificate Program");
   const [ctxDesc, setCtxDesc] = useState("Issued by iBriz");
   const [contextId, setContextId] = useState("");
 
-  const [recipient, setRecipient] = useState("");
+  const [recipientsInput, setRecipientsInput] = useState("");
+  const [extraAccessInput, setExtraAccessInput] = useState("");
+  const [chunkSize, setChunkSize] = useState(10);
   const [credTitle, setCredTitle] = useState("Certificate of Participation");
   const [docRef, setDocRef] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [passphrase, setPassphrase] = useState("");
-  const [confirmPassphrase, setConfirmPassphrase] = useState("");
   const [uploadMsg, setUploadMsg] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ total: number; completed: number; chunk: number; chunks: number } | null>(null);
+  const [bulkErrors, setBulkErrors] = useState<string[]>([]);
+  const [isBulkIssuing, setIsBulkIssuing] = useState(false);
   const [lastTx, setLastTx] = useState<string | null>(null);
   const [msg, setMsg] = useState<string>("");
 
@@ -61,10 +109,15 @@ export default function Issue() {
   }, [capQuery.data]);
 
   const isIssuer = !!issuerCapId;
-  const passphraseReady = passphrase.length >= 8 && passphrase === confirmPassphrase;
+  const recipientsParsed = useMemo(() => parseAddressList(recipientsInput), [recipientsInput]);
+  const extraAccessParsed = useMemo(() => parseAddressList(extraAccessInput), [extraAccessInput]);
+  const validRecipients = recipientsParsed.valid;
+  const invalidRecipients = recipientsParsed.invalid;
+  const extraAccess = extraAccessParsed.valid;
+  const invalidAccess = extraAccessParsed.invalid;
   const adminReady = isIssuer && !!localRegistry;
   const batchReady = !!contextId;
-  const issueReady = adminReady && batchReady && recipient.startsWith("0x");
+  const issueReady = adminReady && batchReady && validRecipients.length > 0 && invalidRecipients.length === 0 && invalidAccess.length === 0;
   const step2Enabled = adminReady;
   const step3Enabled = adminReady && batchReady;
 
@@ -75,6 +128,29 @@ export default function Issue() {
       setMsg(`${label} copied.`);
     } catch {
       setMsg(`Unable to copy ${label.toLowerCase()}. Please select and copy it.`);
+    }
+  }
+
+  async function handleRecipientsFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const found = extractAddresses(text);
+      if (!found.length) {
+        setMsg("No wallet addresses found in that file.");
+        return;
+      }
+      setRecipientsInput((prev) => {
+        const base = prev.trim();
+        const incoming = found.join("\n");
+        return base ? `${base}\n${incoming}` : incoming;
+      });
+      setMsg(`Added ${found.length} addresses from ${file.name}.`);
+    } catch (err) {
+      setMsg(`Could not read that file. ${String(err)}`);
+    } finally {
+      event.target.value = "";
     }
   }
 
@@ -108,11 +184,11 @@ export default function Issue() {
     if (resolvedRegistryId) {
       setRegistryId(resolvedRegistryId);
       setLocalRegistry(resolvedRegistryId);
-      setMsg(`Setup complete. Saved your registry ID in this browser: ${resolvedRegistryId}`);
+      setMsg(`Setup complete. Saved your organization ID in this browser: ${resolvedRegistryId}`);
     } else if (fetchError) {
-      setMsg(`Setup complete, but we could not find the registry ID. ${fetchError}`);
+      setMsg(`Setup complete, but we could not find the organization ID. ${fetchError}`);
     } else {
-      setMsg("Setup complete. Copy the registry ID from the last transaction and paste it below.");
+      setMsg("Setup complete. Copy the organization ID from the last transaction and paste it below.");
     }
 
     // refresh cap query
@@ -164,60 +240,65 @@ export default function Issue() {
 
     if (nextContextId) {
       setContextId(nextContextId);
-      setMsg(`Batch created: ${nextContextId}`);
+      setMsg(`Program created: ${nextContextId}`);
     } else if (fetchError) {
-      setMsg(`Batch created, but we could not find the ID. ${fetchError}`);
+      setMsg(`Program created, but we could not find the ID. ${fetchError}`);
     } else {
-      setMsg("Batch created. Copy the batch ID from the last transaction and paste it below.");
+      setMsg("Program created. Copy the program ID from the last transaction and paste it below.");
     }
   }
 
-  async function issueCredential() {
+  async function issueCredentialsBulk() {
     if (!account || !issuerCapId) return;
-    if (!localRegistry) return setMsg("Missing registry ID. Run setup once, or paste the registry ID.");
-    if (!contextId) return setMsg("Missing batch ID. Create a batch first (or paste one).");
-    if (!recipient.startsWith("0x")) return setMsg("Recipient address must start with 0x.");
+    if (!localRegistry) return setMsg("Missing organization ID. Run setup once, or paste the organization ID.");
+    if (!contextId) return setMsg("Missing program ID. Create a program first (or paste one).");
+    if (!validRecipients.length) return setMsg("Add at least one recipient wallet address.");
+    if (invalidRecipients.length) return setMsg("Remove invalid wallet addresses before issuing.");
+    if (invalidAccess.length) return setMsg("Remove invalid wallet addresses from the access list.");
 
     setMsg("");
+    setBulkErrors([]);
+    const safeChunkSize = Math.max(1, Math.min(chunkSize || 1, 50));
+    const chunks = chunkArray(validRecipients, safeChunkSize);
+    setBulkProgress({ total: validRecipients.length, completed: 0, chunk: 0, chunks: chunks.length });
+    setIsBulkIssuing(true);
 
-    const tx = new Transaction();
-    tx.moveCall({
-      target: target("issue_credential"),
-      arguments: [
-        tx.object(issuerCapId),
-        tx.object(localRegistry),
-        tx.object(contextId),
-        tx.pure.address(recipient),
-        tx.pure.string(credTitle),
-        tx.pure.string(docRef),
-      ],
-    });
-
-    const res = await signAndExecute({ transaction: tx });
-
-    setLastTx(res.digest);
-
-    let credentialId = "";
-    let fetchError = "";
+    let completed = 0;
     try {
-      const txBlock = await client.waitForTransaction({
-        digest: res.digest,
-        options: { showEvents: true, showObjectChanges: true },
-      });
-      const changes: any[] = (txBlock as any).objectChanges || [];
-      const createdCred = changes.find((c) => c.type === "created" && typeof c.objectType === "string" && c.objectType.includes("::Credential"));
-      const credFromEvent = getEventField(txBlock, "::CredentialIssued", ["credential_id", "credentialId"]);
-      credentialId = createdCred?.objectId || credFromEvent || "";
-    } catch (err) {
-      fetchError = String(err);
-    }
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
+        const tx = new Transaction();
+        const capObj = tx.object(issuerCapId);
+        const registryObj = tx.object(localRegistry);
+        const contextObj = tx.object(contextId);
 
-    if (credentialId) {
-      setMsg(`Certificate issued. ID: ${credentialId}`);
-    } else if (fetchError) {
-      setMsg(`Certificate issued, but we could not read the ID. ${fetchError}`);
-    } else {
-      setMsg("Certificate issued. Copy the certificate ID from the last transaction.");
+        for (const recipient of chunk) {
+          const docRefForRecipient = buildDocRefForRecipient(docRef, extraAccess);
+          tx.moveCall({
+            target: target("issue_credential"),
+            arguments: [
+              capObj,
+              registryObj,
+              contextObj,
+              tx.pure.address(recipient),
+              tx.pure.string(credTitle),
+              tx.pure.string(docRefForRecipient),
+            ],
+          });
+        }
+
+        const res = await signAndExecute({ transaction: tx });
+        setLastTx(res.digest);
+        completed += chunk.length;
+        setBulkProgress({ total: validRecipients.length, completed, chunk: index + 1, chunks: chunks.length });
+        setMsg(`Issued ${completed}/${validRecipients.length} certificates.`);
+      }
+      setMsg(`All done. Issued ${validRecipients.length} certificates.`);
+    } catch (err) {
+      setBulkErrors((prev) => [...prev, String(err)]);
+      setMsg("Issuing stopped. Please review the error and try again.");
+    } finally {
+      setIsBulkIssuing(false);
     }
   }
 
@@ -230,18 +311,6 @@ export default function Issue() {
       setUploadError("Upload service is not configured. Please check the app settings.");
       return;
     }
-    if (!passphrase) {
-      setUploadError("Enter a passphrase to lock the file.");
-      return;
-    }
-    if (passphrase.length < 8) {
-      setUploadError("Passphrase needs at least 8 characters.");
-      return;
-    }
-    if (passphrase !== confirmPassphrase) {
-      setUploadError("Passphrases do not match.");
-      return;
-    }
 
     setUploadError("");
     setUploadMsg("");
@@ -249,18 +318,10 @@ export default function Issue() {
 
     try {
       const uploadUrl = WALRUS_UPLOAD_URL.includes("/v1/blobs") ? WALRUS_UPLOAD_URL : `${WALRUS_UPLOAD_URL.replace(/\/$/, "")}/v1/blobs`;
-      const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
-      const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
-      const iterations = DEFAULT_PBKDF2_ITERATIONS;
-      const plaintext = await selectedFile.arrayBuffer();
-      const ciphertext = await encryptWithPassphrase(plaintext, passphrase, salt, iv, iterations);
-
-      const uploadBody: BodyInit = new Blob([ciphertext], { type: "application/octet-stream" });
-      const contentType = "application/octet-stream";
-
+      const contentType = selectedFile.type || "application/octet-stream";
+      const uploadBody: BodyInit = new Blob([await selectedFile.arrayBuffer()], { type: contentType });
       const encodedName = encodeURIComponent(selectedFile.name || "attachment");
-      const encodedMime = encodeURIComponent(selectedFile.type || "application/octet-stream");
-      const metaSuffix = `#enc=v1;alg=aesgcm;kdf=pbkdf2;iter=${iterations};salt=${toBase64Url(salt)};iv=${toBase64Url(iv)};name=${encodedName};mime=${encodedMime}`;
+      const encodedMime = encodeURIComponent(contentType);
 
       const res = await fetch(uploadUrl, {
         method: "PUT",
@@ -337,9 +398,9 @@ export default function Issue() {
         : objectId.startsWith("walrus-object://")
           ? objectId
           : `walrus-object://${objectId}`;
-      const walrusRef = `${walrusRefBase}${metaSuffix}`;
+      const walrusRef = applyWalrusMeta(walrusRefBase, { name: encodedName, mime: encodedMime });
       setDocRef(walrusRef);
-      setUploadMsg(`Uploaded "${selectedFile.name}". Attachment link saved (encrypted).`);
+      setUploadMsg(`Uploaded "${selectedFile.name}". Attachment link saved.`);
     } catch (err) {
       setUploadError(String(err));
     } finally {
@@ -363,11 +424,11 @@ export default function Issue() {
       <div className="steps-progress" style={{ marginTop: 12 }}>
         <div className={`step-chip ${adminReady ? "done" : ""}`}>
           <span className="step-index">1</span>
-          <span>Admin</span>
+          <span>Organization</span>
         </div>
         <div className={`step-chip ${batchReady ? "done" : ""}`}>
           <span className="step-index">2</span>
-          <span>Batch</span>
+          <span>Program</span>
         </div>
         <div className={`step-chip ${issueReady ? "done" : ""}`}>
           <span className="step-index">3</span>
@@ -377,7 +438,7 @@ export default function Issue() {
 
       <div className="step-tabs" style={{ marginTop: 12 }}>
         <button type="button" className={`step-tab ${activeStep === 1 ? "active" : ""}`} onClick={() => setActiveStep(1)}>
-          Step 1: Admin
+          Step 1: Organization
         </button>
         <button
           type="button"
@@ -385,7 +446,7 @@ export default function Issue() {
           disabled={!step2Enabled}
           onClick={() => setActiveStep(2)}
         >
-          Step 2: Batch
+          Step 2: Program
         </button>
         <button
           type="button"
@@ -418,8 +479,8 @@ export default function Issue() {
             <div className="step-header">
               <div className="step-number">1</div>
               <div className="step-meta">
-                <h3 className="step-title">Admin setup</h3>
-                <p className="step-desc">One-time setup that enables issuing certificates.</p>
+                <h3 className="step-title">Organization setup</h3>
+                <p className="step-desc">Create the issuer profile that can publish certificates.</p>
               </div>
               <span className={`badge ${adminReady ? "ok" : ""}`}>{adminReady ? "Ready" : "Needs setup"}</span>
             </div>
@@ -427,36 +488,36 @@ export default function Issue() {
             <div style={{ marginTop: 12 }}>
               {!isIssuer && (
                 <button className="btn" disabled={!account || isPending} onClick={createIssuer}>
-                  Set up admin access
+                  Create organization profile
                 </button>
               )}
               {isIssuer && (
                 <div>
                   <button className="btn" disabled={!account || isPending} onClick={createIssuer}>
-                    Create a new registry anyway
+                    Create another organization profile
                   </button>
-                  <p className="small">Use this if you want a separate registry for a new organization.</p>
+                  <p className="small">Use this if you want a separate profile for another organization.</p>
                 </div>
               )}
               {capQuery.isPending && <p className="small">Checking admin access...</p>}
             </div>
 
             <div style={{ marginTop: 12 }}>
-              <label className="small">Registry ID (shared list)</label>
+              <label className="small">Organization ID (shared list)</label>
               <input
                 value={localRegistry}
                 onChange={(e) => {
                   setLocalRegistry(e.target.value);
                   setRegistryId(e.target.value);
                 }}
-                placeholder="0x... registry id"
+                placeholder="0x... organization id"
               />
               <p className="small">
-                Current registry ID: {localRegistry ? <span className="badge">{localRegistry}</span> : <span className="badge">not set</span>}
+                Current organization ID: {localRegistry ? <span className="badge">{localRegistry}</span> : <span className="badge">not set</span>}
               </p>
               {localRegistry && (
-                <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Registry ID", localRegistry)}>
-                  Copy registry ID
+                <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Organization ID", localRegistry)}>
+                  Copy organization ID
                 </button>
               )}
               <p className="small">We save this in your browser after setup.</p>
@@ -464,7 +525,7 @@ export default function Issue() {
 
             <div className="step-actions">
               <button className="btn" disabled={!step2Enabled} onClick={() => setActiveStep(2)}>
-                Continue to batch setup
+                Continue to program setup
               </button>
             </div>
           </div>
@@ -475,14 +536,14 @@ export default function Issue() {
             <div className="step-header">
               <div className="step-number">2</div>
               <div className="step-meta">
-                <h3 className="step-title">Create a batch</h3>
-                <p className="step-desc">Batches group certificates for an event or course.</p>
+                <h3 className="step-title">Create a program</h3>
+                <p className="step-desc">Programs group certificates for an event or course.</p>
               </div>
               <span className={`badge ${batchReady ? "ok" : ""}`}>{batchReady ? "Ready" : "Not set"}</span>
             </div>
 
             <div style={{ marginTop: 12 }}>
-              <label className="small">Batch title</label>
+              <label className="small">Program title</label>
               <input value={ctxTitle} onChange={(e) => setCtxTitle(e.target.value)} />
               <label className="small" style={{ marginTop: 8, display: "block" }}>
                 Description
@@ -490,18 +551,18 @@ export default function Issue() {
               <input value={ctxDesc} onChange={(e) => setCtxDesc(e.target.value)} />
 
               <button className="btn" style={{ marginTop: 12 }} disabled={!account || !isIssuer || isPending} onClick={createContext}>
-                Create batch
+                Create program
               </button>
 
               <div style={{ marginTop: 12 }}>
-                <label className="small">Batch ID</label>
-                <input value={contextId} onChange={(e) => setContextId(e.target.value)} placeholder="0x... batch id" />
+                <label className="small">Program ID</label>
+                <input value={contextId} onChange={(e) => setContextId(e.target.value)} placeholder="0x... program id" />
                 <p className="small">
-                  Current batch ID: {contextId ? <span className="badge">{contextId}</span> : <span className="badge">not set</span>}
+                  Current program ID: {contextId ? <span className="badge">{contextId}</span> : <span className="badge">not set</span>}
                 </p>
                 {contextId && (
-                  <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Batch ID", contextId)}>
-                    Copy batch ID
+                  <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Program ID", contextId)}>
+                    Copy program ID
                   </button>
                 )}
               </div>
@@ -523,8 +584,8 @@ export default function Issue() {
             <div className="step-header">
               <div className="step-number">3</div>
               <div className="step-meta">
-                <h3 className="step-title">Issue a certificate</h3>
-                <p className="step-desc">Add the recipient and optional attachment, then issue.</p>
+                <h3 className="step-title">Issue certificates</h3>
+                <p className="step-desc">Add recipients, attach a file, and issue in bulk.</p>
               </div>
               <span className={`badge ${issueReady ? "ok" : ""}`}>{issueReady ? "Ready" : "Waiting for details"}</span>
             </div>
@@ -532,14 +593,63 @@ export default function Issue() {
             <div style={{ marginTop: 12 }}>
               <div className="row">
                 <div>
-                  <label className="small">Recipient wallet address</label>
-                  <input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="0x... recipient wallet" />
-                </div>
-                <div>
                   <label className="small">Certificate title</label>
                   <input value={credTitle} onChange={(e) => setCredTitle(e.target.value)} />
                 </div>
+                <div>
+                  <label className="small">Chunk size</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={chunkSize}
+                    onChange={(e) => setChunkSize(Math.max(1, Number(e.target.value) || 1))}
+                  />
+                  <p className="small">Larger chunks mean fewer wallet prompts.</p>
+                </div>
               </div>
+
+              <label className="small" style={{ marginTop: 8, display: "block" }}>
+                Recipient wallet addresses
+              </label>
+              <textarea
+                rows={6}
+                value={recipientsInput}
+                onChange={(e) => setRecipientsInput(e.target.value)}
+                placeholder="Paste 0x... addresses (one per line or comma-separated)"
+              />
+              <p className="small">
+                Valid recipients: {validRecipients.length}. {invalidRecipients.length ? `Invalid: ${invalidRecipients.length}` : "All entries look valid."}
+              </p>
+              {invalidRecipients.length > 0 && (
+                <p className="small">
+                  Invalid entries: {invalidRecipients.slice(0, 5).join(", ")}
+                  {invalidRecipients.length > 5 ? "..." : ""}
+                </p>
+              )}
+
+              <label className="small" style={{ marginTop: 12, display: "block" }}>
+                Import list (CSV)
+              </label>
+              <input type="file" accept=".csv,text/csv" onChange={handleRecipientsFileChange} />
+
+              <label className="small" style={{ marginTop: 12, display: "block" }}>
+                Additional allowed wallets (optional)
+              </label>
+              <textarea
+                rows={3}
+                value={extraAccessInput}
+                onChange={(e) => setExtraAccessInput(e.target.value)}
+                placeholder="0x... extra wallets who can open the attachment"
+              />
+              {invalidAccess.length > 0 && (
+                <p className="small">
+                  Invalid allowlist entries: {invalidAccess.slice(0, 5).join(", ")}
+                  {invalidAccess.length > 5 ? "..." : ""}
+                </p>
+              )}
+              <p className="small">Recipients can always open the attachment. Add extra wallets only if needed.</p>
+              <p className="small">This gate hides the download button in the app. Anyone with the link can still access the file.</p>
 
               <label className="small" style={{ marginTop: 8, display: "block" }}>
                 Attachment link (optional)
@@ -560,59 +670,30 @@ export default function Issue() {
                 }}
               />
 
-              <div style={{ marginTop: 8 }}>
-                <label className="small">Passphrase (required to open file)</label>
-                <input
-                  type="password"
-                  value={passphrase}
-                  onChange={(e) => {
-                    setPassphrase(e.target.value);
-                    setUploadError("");
-                    setUploadMsg("");
-                  }}
-                  placeholder="8+ characters"
-                />
-                <label className="small" style={{ marginTop: 8, display: "block" }}>
-                  Confirm passphrase
-                </label>
-                <input
-                  type="password"
-                  value={confirmPassphrase}
-                  onChange={(e) => {
-                    setConfirmPassphrase(e.target.value);
-                    setUploadError("");
-                    setUploadMsg("");
-                  }}
-                  placeholder="Re-enter passphrase"
-                />
-                <p className="small">Share the passphrase with the recipient so they can open the file.</p>
-                {passphrase && passphrase.length < 8 && (
-                  <p className="small" style={{ marginTop: 6 }}>
-                    Passphrase needs at least 8 characters.
-                  </p>
-                )}
-                {passphrase && confirmPassphrase && passphrase !== confirmPassphrase && (
-                  <p className="small" style={{ marginTop: 6 }}>
-                    Passphrases do not match.
-                  </p>
-                )}
-              </div>
-
-              <button className="btn" style={{ marginTop: 8 }} disabled={!selectedFile || isUploading || !passphraseReady} onClick={uploadToWalrus}>
-                {isUploading ? "Uploading..." : "Encrypt and upload"}
+              <button className="btn" style={{ marginTop: 8 }} disabled={!selectedFile || isUploading} onClick={uploadToWalrus}>
+                {isUploading ? "Uploading..." : "Upload to Walrus"}
               </button>
               {uploadMsg && <p className="small" style={{ marginTop: 8 }}>{uploadMsg}</p>}
               {uploadError && <p className="small" style={{ marginTop: 8 }}>{uploadError}</p>}
 
+              {bulkProgress && (
+                <p className="small" style={{ marginTop: 8 }}>
+                  Progress: {bulkProgress.completed}/{bulkProgress.total} (chunk {bulkProgress.chunk}/{bulkProgress.chunks})
+                </p>
+              )}
+              {bulkErrors.length > 0 && (
+                <pre style={{ marginTop: 8 }}>{bulkErrors.join("\n")}</pre>
+              )}
+
               <div className="step-actions">
                 <button className="btn secondary" onClick={() => setActiveStep(2)}>
-                  Back to batch
+                  Back to program
                 </button>
-                <button className="btn" disabled={!issueReady || isPending} onClick={issueCredential}>
-                  Issue certificate
+                <button className="btn" disabled={!issueReady || isPending || isBulkIssuing} onClick={issueCredentialsBulk}>
+                  {isBulkIssuing ? "Issuing..." : `Issue to ${validRecipients.length || 0} recipients`}
                 </button>
               </div>
-              {!issueReady && <p className="small">Add a recipient address and select a batch to enable issuing.</p>}
+              {!issueReady && <p className="small">Add recipients and select a program to enable issuing.</p>}
             </div>
           </div>
         )}

@@ -1,25 +1,48 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useCurrentAccount, useSuiClientQuery } from "@mysten/dapp-kit";
-import { WALRUS_VIEW_URL, getRegistryId, setRegistryId as setStoredRegistryId } from "../config";
-import { DEFAULT_PBKDF2_ITERATIONS, decryptWithPassphrase, fromBase64Url } from "../lib/crypto";
+import { TYPES, WALRUS_VIEW_URL, getRegistryId, setRegistryId as setStoredRegistryId } from "../config";
 import { asMoveFields, decodeMoveString, extractVecSetAddresses } from "../lib/move";
 import { buildWalrusBlobUrl, parseWalrusRef } from "../lib/walrus";
 
+function normalizeAddress(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function parseAccessList(value: string | undefined): string[] {
+  if (!value) return [];
+  const decoded = safeDecode(value);
+  return decoded
+    .split(",")
+    .map((addr) => normalizeAddress(addr))
+    .filter(Boolean);
+}
+
+function formatIssuedAt(value: unknown): string {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return String(value ?? "");
+  return new Date(num).toLocaleString();
+}
+
 export default function Verify() {
   const account = useCurrentAccount();
-  const [credentialId, setCredentialId] = useState("");
   const [registryId, setRegistryId] = useState(() => getRegistryId());
-  const [decryptPassphrase, setDecryptPassphrase] = useState("");
-  const [decryptMsg, setDecryptMsg] = useState("");
-  const [decryptError, setDecryptError] = useState("");
-  const [isDecrypting, setIsDecrypting] = useState(false);
-  const [decryptedUrl, setDecryptedUrl] = useState("");
-  const [decryptedName, setDecryptedName] = useState("");
 
-  const credQuery = useSuiClientQuery(
-    "getObject",
-    { id: credentialId || "0x0", options: { showType: true, showContent: true, showOwner: true } },
-    { enabled: !!credentialId }
+  const ownedQuery = useSuiClientQuery(
+    "getOwnedObjects",
+    {
+      owner: account?.address ?? "0x0",
+      filter: { StructType: TYPES.Credential },
+      options: { showContent: true, showType: true },
+    },
+    { enabled: !!account }
   );
 
   const registryQuery = useSuiClientQuery(
@@ -28,205 +51,118 @@ export default function Verify() {
     { enabled: !!registryId }
   );
 
-  const credFields = useMemo(() => asMoveFields(credQuery.data), [credQuery.data]);
+  const credentials = useMemo(() => {
+    const items = ownedQuery.data?.data ?? [];
+    return items
+      .map((item) => ({
+        id: item?.data?.objectId || "",
+        fields: asMoveFields(item),
+      }))
+      .filter((item) => item.id && item.fields);
+  }, [ownedQuery.data]);
+
   const regFields = useMemo(() => asMoveFields(registryQuery.data), [registryQuery.data]);
+  const revokedSet = useMemo(() => {
+    const revoked = extractVecSetAddresses(regFields?.revoked);
+    return new Set(revoked.map((addr) => normalizeAddress(addr)));
+  }, [regFields]);
 
-  const looksCredential = credQuery.data?.data?.type?.includes("::Credential");
-  const revokedList = useMemo(() => extractVecSetAddresses(regFields?.revoked), [regFields]);
-  const isRevoked = useMemo(() => revokedList.includes(credentialId), [revokedList, credentialId]);
-  const docRef = useMemo(() => decodeMoveString(credFields?.doc_ref), [credFields]);
-  const walrusRef = useMemo(() => parseWalrusRef(docRef), [docRef]);
-  const walrusUrl = useMemo(() => buildWalrusBlobUrl(WALRUS_VIEW_URL, walrusRef), [WALRUS_VIEW_URL, walrusRef]);
-  const isEncrypted = walrusRef?.meta?.enc === "v1";
-
-  useEffect(() => {
-    return () => {
-      if (decryptedUrl) {
-        URL.revokeObjectURL(decryptedUrl);
-      }
-    };
-  }, [decryptedUrl]);
-
-  useEffect(() => {
-    setDecryptMsg("");
-    setDecryptError("");
-    setDecryptedUrl("");
-    setDecryptedName("");
-  }, [docRef]);
-
-  function safeDecode(value: string): string {
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
-  }
-
-  async function decryptAttachment() {
-    if (!walrusRef) {
-      setDecryptError("No attachment link found.");
-      return;
-    }
-    if (!walrusUrl) {
-      setDecryptError("Attachment viewer is not configured.");
-      return;
-    }
-    if (!isEncrypted) {
-      setDecryptError("This attachment is not encrypted.");
-      return;
-    }
-    if (!decryptPassphrase) {
-      setDecryptError("Enter the passphrase to unlock.");
-      return;
-    }
-
-    const saltEncoded = walrusRef.meta.salt;
-    const ivEncoded = walrusRef.meta.iv;
-    if (!saltEncoded || !ivEncoded) {
-      setDecryptError("Attachment info is incomplete.");
-      return;
-    }
-
-    const iterations = Number(walrusRef.meta.iter || DEFAULT_PBKDF2_ITERATIONS);
-    if (!Number.isFinite(iterations) || iterations <= 0) {
-      setDecryptError("Attachment info is invalid.");
-      return;
-    }
-
-    setDecryptError("");
-    setDecryptMsg("");
-    setIsDecrypting(true);
-    setDecryptedUrl("");
-    setDecryptedName("");
-
-    try {
-      const res = await fetch(walrusUrl);
-      if (!res.ok) {
-        throw new Error(`Download failed (${res.status} ${res.statusText}).`);
-      }
-
-      const cipher = await res.arrayBuffer();
-      const salt = fromBase64Url(saltEncoded);
-      const iv = fromBase64Url(ivEncoded);
-      const plaintext = await decryptWithPassphrase(cipher, decryptPassphrase, salt, iv, iterations);
-
-      const mime = walrusRef.meta.mime ? safeDecode(walrusRef.meta.mime) : "application/octet-stream";
-      const name = walrusRef.meta.name ? safeDecode(walrusRef.meta.name) : "attachment";
-      const blob = new Blob([plaintext], { type: mime || "application/octet-stream" });
-      const url = URL.createObjectURL(blob);
-
-      setDecryptedUrl(url);
-      setDecryptedName(name);
-      setDecryptMsg("Unlocked. You can download the file.");
-    } catch (err) {
-      setDecryptError(String(err));
-    } finally {
-      setIsDecrypting(false);
-    }
-  }
+  const viewerAddress = account?.address ? normalizeAddress(account.address) : "";
 
   return (
     <div className="card">
-      <h2 style={{ marginTop: 0 }}>Verify Certificate</h2>
-      <p className="small">You do not need a wallet to verify.</p>
+      <h2 style={{ marginTop: 0 }}>My Certificates</h2>
+      <p className="small">Certificates appear automatically when your wallet is connected.</p>
 
-      <div className="row" style={{ marginTop: 12 }}>
-        <div>
-          <label className="small">Certificate ID</label>
-          <input value={credentialId} onChange={(e) => setCredentialId(e.target.value)} placeholder="0x... certificate id" />
-        </div>
-        <div>
-          <label className="small">Registry ID (shared list)</label>
+      {!account && <p className="small">Connect your wallet to view your certificates.</p>}
+
+      {!!account && (
+        <div style={{ marginTop: 12 }}>
+          <label className="small">Organization ID (optional, for revocation checks)</label>
           <input
             value={registryId}
             onChange={(e) => {
               setRegistryId(e.target.value);
               setStoredRegistryId(e.target.value);
             }}
-            placeholder="0x... registry id"
+            placeholder="0x... organization id"
           />
+          <p className="small">Ask the issuer for this ID if you want revocation status.</p>
         </div>
-      </div>
+      )}
 
-      {credQuery.isPending && (
+      {!!account && ownedQuery.isPending && (
         <p className="small" style={{ marginTop: 12 }}>
-          Loading certificate...
+          Loading your certificates...
         </p>
       )}
-      {credQuery.error && <p style={{ marginTop: 12 }}>Error: {String(credQuery.error)}</p>}
+      {!!account && ownedQuery.error && <p style={{ marginTop: 12 }}>Error: {String(ownedQuery.error)}</p>}
 
-      {credFields && (
-        <div className="card" style={{ marginTop: 12 }}>
-          <div className="row" style={{ alignItems: "center" }}>
-            <h3 style={{ margin: 0, flex: 1 }}>Certificate Details</h3>
-            {looksCredential ? <span className="badge ok">Certificate</span> : <span className="badge bad">Not a certificate</span>}
-            {registryId ? isRevoked ? <span className="badge bad">Revoked</span> : <span className="badge ok">Valid</span> : <span className="badge">No registry</span>}
-          </div>
+      {!!account && !ownedQuery.isPending && credentials.length === 0 && (
+        <p className="small" style={{ marginTop: 12 }}>
+          No certificates found for this wallet yet.
+        </p>
+      )}
 
-          <div style={{ marginTop: 12 }}>
-            <p className="small">Issued by</p>
-            <pre>{credFields.issuer || "(missing)"}</pre>
+      {!!account && credentials.length > 0 && (
+        <div className="cards-grid" style={{ marginTop: 12 }}>
+          {credentials.map(({ id, fields }) => {
+            const docRef = decodeMoveString(fields?.doc_ref);
+            const walrusRef = parseWalrusRef(docRef);
+            const walrusUrl = buildWalrusBlobUrl(WALRUS_VIEW_URL, walrusRef);
+            const allowList = parseAccessList(walrusRef?.meta?.acl);
+            const recipient = normalizeAddress(String(fields?.recipient ?? ""));
+            const canAccess = viewerAddress && (viewerAddress === recipient || allowList.includes(viewerAddress));
+            const isRevoked = registryId ? revokedSet.has(normalizeAddress(id)) : false;
+            const attachmentName = walrusRef?.meta?.name ? safeDecode(walrusRef.meta.name) : "attachment";
 
-            <p className="small">Recipient</p>
-            <pre>{credFields.recipient || "(missing)"}</pre>
+            return (
+              <div key={id} className="card">
+                <div className="row" style={{ alignItems: "center" }}>
+                  <h3 style={{ margin: 0, flex: 1 }}>{decodeMoveString(fields?.title) || "Certificate"}</h3>
+                  {registryId ? (
+                    isRevoked ? <span className="badge bad">Revoked</span> : <span className="badge ok">Valid</span>
+                  ) : (
+                    <span className="badge">No revocation check</span>
+                  )}
+                </div>
 
-            <p className="small">Batch</p>
-            <pre>{credFields.context || "(missing)"}</pre>
+                <div style={{ marginTop: 12 }}>
+                  <p className="small">Certificate ID</p>
+                  <pre>{id}</pre>
 
-            <p className="small">Title</p>
-            <pre>{decodeMoveString(credFields.title)}</pre>
+                  <p className="small">Issued by</p>
+                  <pre>{fields?.issuer || "(missing)"}</pre>
 
-            <p className="small">Issued at (timestamp)</p>
-            <pre>{String(credFields.issued_at_ms ?? "(missing)")}</pre>
+                  <p className="small">Issued to</p>
+                  <pre>{fields?.recipient || "(missing)"}</pre>
 
-            <p className="small">Attachment link</p>
-            <pre>{docRef || "(missing)"}</pre>
-            {walrusUrl && (
-              <p className="small" style={{ marginTop: 8 }}>
-                Attachment:{" "}
-                <a href={walrusUrl} target="_blank" rel="noreferrer">
-                  Open file
-                </a>
-              </p>
-            )}
-            {isEncrypted && (
-              <div style={{ marginTop: 12 }}>
-                <p className="small">This file is locked. Enter the passphrase to open it here.</p>
-                <label className="small">Passphrase</label>
-                <input
-                  type="password"
-                  value={decryptPassphrase}
-                  onChange={(e) => {
-                    setDecryptPassphrase(e.target.value);
-                    setDecryptError("");
-                    setDecryptMsg("");
-                  }}
-                  placeholder="Passphrase"
-                />
-                <button className="btn" style={{ marginTop: 8 }} disabled={isDecrypting} onClick={decryptAttachment}>
-                  {isDecrypting ? "Unlocking..." : "Unlock file"}
-                </button>
-                {decryptMsg && (
-                  <p className="small" style={{ marginTop: 8 }}>
-                    {decryptMsg}
-                  </p>
-                )}
-                {decryptError && (
-                  <p className="small" style={{ marginTop: 8 }}>
-                    {decryptError}
-                  </p>
-                )}
-                {decryptedUrl && (
-                  <p className="small" style={{ marginTop: 8 }}>
-                    Unlocked file:{" "}
-                    <a href={decryptedUrl} download={decryptedName || "attachment"}>
-                      Download
-                    </a>
-                  </p>
-                )}
+                  <p className="small">Program</p>
+                  <pre>{fields?.context || "(missing)"}</pre>
+
+                  <p className="small">Issued at</p>
+                  <pre>{formatIssuedAt(fields?.issued_at_ms)}</pre>
+
+                  <p className="small">Attachment link</p>
+                  <pre>{docRef || "(none)"}</pre>
+
+                  {walrusUrl && canAccess && (
+                    <p className="small" style={{ marginTop: 8 }}>
+                      Attachment:{" "}
+                      <a href={walrusUrl} target="_blank" rel="noreferrer" download={attachmentName}>
+                        Download file
+                      </a>
+                    </p>
+                  )}
+                  {walrusUrl && !canAccess && (
+                    <p className="small" style={{ marginTop: 8 }}>
+                      Attachment available to listed wallets only.
+                    </p>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+            );
+          })}
         </div>
       )}
 
@@ -236,15 +172,17 @@ export default function Verify() {
         </p>
       )}
 
-      <div className="card" style={{ marginTop: 12 }}>
-        <h3 style={{ marginTop: 0 }}>How revocation is checked</h3>
-        <p className="small">
-          We read the shared registry and check whether this certificate ID is on the revoked list.
-        </p>
-        {registryQuery.isPending && <p className="small">Loading registry...</p>}
-        {registryQuery.error && <p>Error: {String(registryQuery.error)}</p>}
-        {registryId && !regFields && !registryQuery.isPending && <p className="small">Registry loaded, but details could not be read.</p>}
-      </div>
+      {!!account && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <h3 style={{ marginTop: 0 }}>How revocation is checked</h3>
+          <p className="small">We read the organization list and see if your certificate ID is revoked.</p>
+          {registryQuery.isPending && <p className="small">Loading organization list...</p>}
+          {registryQuery.error && <p>Error: {String(registryQuery.error)}</p>}
+          {registryId && !regFields && !registryQuery.isPending && (
+            <p className="small">Organization list loaded, but details could not be read.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
