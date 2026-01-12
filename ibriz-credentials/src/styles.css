@@ -155,6 +155,11 @@ input:focus, textarea:focus{ border-color: rgba(26,167,161,0.65); }
 }
 .row{ display:flex; gap:16px; flex-wrap:wrap; }
 .row > *{ flex: 1; min-width: 240px; }
+.cards-grid{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
 
 .steps{ display:flex; flex-direction:column; gap:16px; }
 .steps-progress{ display:flex; gap:10px; flex-wrap:wrap; }

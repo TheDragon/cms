@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { ConnectButton } from "@mysten/dapp-kit";
-import { NETWORK } from "./config";
+import { useEffect, useMemo, useState } from "react";
+import { ConnectButton, useCurrentAccount, useSuiClientQuery } from "@mysten/dapp-kit";
+import { NETWORK, TYPES } from "./config";
 import Issue from "./pages/Issue";
 import Verify from "./pages/Verify";
 import Revocations from "./pages/Revocations";
@@ -9,35 +9,57 @@ type Tab = "issue" | "verify" | "revoke";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("verify");
+  const account = useCurrentAccount();
+  const capQuery = useSuiClientQuery(
+    "getOwnedObjects",
+    {
+      owner: account?.address ?? "0x0",
+      filter: { StructType: TYPES.IssuerCap },
+      options: { showType: true },
+    },
+    { enabled: !!account }
+  );
+  const isIssuer = useMemo(() => {
+    const first = capQuery.data?.data?.[0];
+    return !!first?.data?.objectId;
+  }, [capQuery.data]);
+  const tabs = useMemo<Tab[]>(() => (isIssuer ? ["issue", "verify", "revoke"] : ["verify"]), [isIssuer]);
+
+  useEffect(() => {
+    if (!tabs.includes(tab)) {
+      setTab("verify");
+    }
+  }, [tab, tabs]);
+
   const tabMeta: Record<Tab, { title: string; subtitle: string }> = {
     issue: {
       title: "Issue certificates",
-      subtitle: "Create batches, attach files, and publish certificates in a guided flow.",
+      subtitle: "Create programs, attach files, and publish certificates in bulk.",
     },
     verify: {
-      title: "Verify certificates",
-      subtitle: "Look up a certificate, check revocations, and unlock attachments.",
+      title: "My certificates",
+      subtitle: account ? "See certificates owned by the connected wallet." : "Connect a wallet to view your certificates.",
     },
     revoke: {
       title: "Revoke certificates",
-      subtitle: "Admin-only control to invalidate a certificate from the shared registry.",
+      subtitle: "Admin-only control to invalidate a certificate from the shared list.",
     },
   };
   const tabTips: Record<Tab, { title: string; items: string[]; note: string }> = {
     issue: {
-      title: "Issuing checklist",
-      items: ["Connect the admin wallet", "Run admin setup once", "Create a batch for this event", "Add the recipient and attachment"],
-      note: "Your registry ID stays in this browser after setup.",
+      title: "Admin checklist",
+      items: ["Connect the admin wallet", "Create the organization profile", "Create a program", "Add recipients and issue"],
+      note: "Your organization ID stays in this browser after setup.",
     },
     verify: {
-      title: "Verification tips",
-      items: ["No wallet required", "Use the shared registry ID", "Paste the certificate ID", "Use the passphrase to unlock files"],
-      note: "If the file is locked, the passphrase comes from the issuer.",
+      title: "Viewer tips",
+      items: ["Wallet required", "Certificates load automatically", "Use the organization ID to check revocations"],
+      note: "Attachments open only when your wallet is on the access list.",
     },
     revoke: {
       title: "Revocation tips",
-      items: ["Admin wallet required", "Registry ID must match the issuer", "Revocation is permanent once confirmed"],
-      note: "Revoked certificates stay in the registry list.",
+      items: ["Admin wallet required", "Organization ID must match the issuer", "Revocation is permanent once confirmed"],
+      note: "Revoked certificates stay in the shared list.",
     },
   };
   const meta = tabMeta[tab];
@@ -55,15 +77,19 @@ export default function App() {
         </div>
 
         <nav className="side-nav">
-          <button className={`side-tab ${tab === "issue" ? "active" : ""}`} onClick={() => setTab("issue")}>
-            Issue
-          </button>
+          {isIssuer && (
+            <button className={`side-tab ${tab === "issue" ? "active" : ""}`} onClick={() => setTab("issue")}>
+              Issue
+            </button>
+          )}
           <button className={`side-tab ${tab === "verify" ? "active" : ""}`} onClick={() => setTab("verify")}>
-            Verify
+            My Certificates
           </button>
-          <button className={`side-tab ${tab === "revoke" ? "active" : ""}`} onClick={() => setTab("revoke")}>
-            Revoke
-          </button>
+          {isIssuer && (
+            <button className={`side-tab ${tab === "revoke" ? "active" : ""}`} onClick={() => setTab("revoke")}>
+              Revoke
+            </button>
+          )}
         </nav>
 
         <div className="side-divider" />
