@@ -69,6 +69,9 @@ export default function Issue() {
   const client = useSuiClient();
   const [localRegistry, setLocalRegistry] = useState(() => getRegistryId());
   const [activeStep, setActiveStep] = useState<1 | 2 | 3>(1);
+  const [showOrgAdvanced, setShowOrgAdvanced] = useState(false);
+  const [showProgramAdvanced, setShowProgramAdvanced] = useState(false);
+  const [showIssueAdvanced, setShowIssueAdvanced] = useState(false);
 
   const [ctxTitle, setCtxTitle] = useState("ABC Certificate Program");
   const [ctxDesc, setCtxDesc] = useState("Issued by iBriz");
@@ -138,7 +141,7 @@ export default function Issue() {
       const text = await file.text();
       const found = extractAddresses(text);
       if (!found.length) {
-        setMsg("No wallet addresses found in that file.");
+        setMsg("No recipients found in that file.");
         return;
       }
       setRecipientsInput((prev) => {
@@ -146,7 +149,7 @@ export default function Issue() {
         const incoming = found.join("\n");
         return base ? `${base}\n${incoming}` : incoming;
       });
-      setMsg(`Added ${found.length} addresses from ${file.name}.`);
+      setMsg(`Added ${found.length} recipients from ${file.name}.`);
     } catch (err) {
       setMsg(`Could not read that file. ${String(err)}`);
     } finally {
@@ -184,11 +187,11 @@ export default function Issue() {
     if (resolvedRegistryId) {
       setRegistryId(resolvedRegistryId);
       setLocalRegistry(resolvedRegistryId);
-      setMsg(`Setup complete. Saved your organization ID in this browser: ${resolvedRegistryId}`);
+      setMsg("Setup complete. Organization linked to this browser.");
     } else if (fetchError) {
       setMsg(`Setup complete, but we could not find the organization ID. ${fetchError}`);
     } else {
-      setMsg("Setup complete. Copy the organization ID from the last transaction and paste it below.");
+      setMsg("Setup complete. Use advanced options if you need to view or copy the organization ID.");
     }
 
     // refresh cap query
@@ -240,11 +243,11 @@ export default function Issue() {
 
     if (nextContextId) {
       setContextId(nextContextId);
-      setMsg(`Program created: ${nextContextId}`);
+      setMsg("Program created and linked to this browser.");
     } else if (fetchError) {
       setMsg(`Program created, but we could not find the ID. ${fetchError}`);
     } else {
-      setMsg("Program created. Copy the program ID from the last transaction and paste it below.");
+      setMsg("Program created. Use advanced options if you need to view or copy the program ID.");
     }
   }
 
@@ -252,9 +255,9 @@ export default function Issue() {
     if (!account || !issuerCapId) return;
     if (!localRegistry) return setMsg("Missing organization ID. Run setup once, or paste the organization ID.");
     if (!contextId) return setMsg("Missing program ID. Create a program first (or paste one).");
-    if (!validRecipients.length) return setMsg("Add at least one recipient wallet address.");
-    if (invalidRecipients.length) return setMsg("Remove invalid wallet addresses before issuing.");
-    if (invalidAccess.length) return setMsg("Remove invalid wallet addresses from the access list.");
+    if (!validRecipients.length) return setMsg("Add at least one recipient.");
+    if (invalidRecipients.length) return setMsg("Remove invalid entries before issuing.");
+    if (invalidAccess.length) return setMsg("Remove invalid entries from the access list.");
 
     setMsg("");
     setBulkErrors([]);
@@ -411,7 +414,7 @@ export default function Issue() {
   return (
     <div className="card">
       <h2 style={{ marginTop: 0 }}>Issue Certificates (Admin)</h2>
-      <p className="small">Follow the steps below. Only admins can issue certificates.</p>
+      <p className="small">Start by creating an organization. Once approved, you can issue certificates.</p>
 
       {!account ? (
         <p className="small">Connect your wallet to get started.</p>
@@ -503,25 +506,40 @@ export default function Issue() {
             </div>
 
             <div style={{ marginTop: 12 }}>
-              <label className="small">Organization ID (shared list)</label>
-              <input
-                value={localRegistry}
-                onChange={(e) => {
-                  setLocalRegistry(e.target.value);
-                  setRegistryId(e.target.value);
-                }}
-                placeholder="0x... organization id"
-              />
               <p className="small">
-                Current organization ID: {localRegistry ? <span className="badge">{localRegistry}</span> : <span className="badge">not set</span>}
+                Organization saved in this browser: {localRegistry ? <span className="badge ok">Yes</span> : <span className="badge">Not yet</span>}
               </p>
-              {localRegistry && (
-                <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Organization ID", localRegistry)}>
-                  Copy organization ID
-                </button>
-              )}
-              <p className="small">We save this in your browser after setup.</p>
+              <button
+                className="btn secondary"
+                style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }}
+                onClick={() => setShowOrgAdvanced((prev) => !prev)}
+              >
+                {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
+              </button>
             </div>
+
+            {showOrgAdvanced && (
+              <div style={{ marginTop: 12 }}>
+                <label className="small">Organization ID (shared list)</label>
+                <input
+                  value={localRegistry}
+                  onChange={(e) => {
+                    setLocalRegistry(e.target.value);
+                    setRegistryId(e.target.value);
+                  }}
+                  placeholder="0x... organization id"
+                />
+                <p className="small">
+                  Current organization ID: {localRegistry ? <span className="badge">{localRegistry}</span> : <span className="badge">not set</span>}
+                </p>
+                {localRegistry && (
+                  <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Organization ID", localRegistry)}>
+                    Copy organization ID
+                  </button>
+                )}
+                <p className="small">Use this only if you are switching browsers or accounts.</p>
+              </div>
+            )}
 
             <div className="step-actions">
               <button className="btn" disabled={!step2Enabled} onClick={() => setActiveStep(2)}>
@@ -555,22 +573,38 @@ export default function Issue() {
               </button>
 
               <div style={{ marginTop: 12 }}>
-                <label className="small">Program ID</label>
-                <input value={contextId} onChange={(e) => setContextId(e.target.value)} placeholder="0x... program id" />
                 <p className="small">
-                  Current program ID: {contextId ? <span className="badge">{contextId}</span> : <span className="badge">not set</span>}
+                  Program saved in this browser: {contextId ? <span className="badge ok">Yes</span> : <span className="badge">Not yet</span>}
                 </p>
-                {contextId && (
-                  <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Program ID", contextId)}>
-                    Copy program ID
-                  </button>
-                )}
+                <button
+                  className="btn secondary"
+                  style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }}
+                  onClick={() => setShowProgramAdvanced((prev) => !prev)}
+                >
+                  {showProgramAdvanced ? "Hide advanced options" : "Advanced options"}
+                </button>
               </div>
+
+              {showProgramAdvanced && (
+                <div style={{ marginTop: 12 }}>
+                  <label className="small">Program ID</label>
+                  <input value={contextId} onChange={(e) => setContextId(e.target.value)} placeholder="0x... program id" />
+                  <p className="small">
+                    Current program ID: {contextId ? <span className="badge">{contextId}</span> : <span className="badge">not set</span>}
+                  </p>
+                  {contextId && (
+                    <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Program ID", contextId)}>
+                      Copy program ID
+                    </button>
+                  )}
+                  <p className="small">Use this only if you are switching browsers or accounts.</p>
+                </div>
+              )}
             </div>
 
             <div className="step-actions">
               <button className="btn secondary" onClick={() => setActiveStep(1)}>
-                Back to admin
+                Back to organization
               </button>
               <button className="btn" disabled={!step3Enabled} onClick={() => setActiveStep(3)}>
                 Continue to issuing
@@ -591,32 +625,17 @@ export default function Issue() {
             </div>
 
             <div style={{ marginTop: 12 }}>
-              <div className="row">
-                <div>
-                  <label className="small">Certificate title</label>
-                  <input value={credTitle} onChange={(e) => setCredTitle(e.target.value)} />
-                </div>
-                <div>
-                  <label className="small">Chunk size</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={chunkSize}
-                    onChange={(e) => setChunkSize(Math.max(1, Number(e.target.value) || 1))}
-                  />
-                  <p className="small">Larger chunks mean fewer wallet prompts.</p>
-                </div>
-              </div>
+              <label className="small">Certificate title</label>
+              <input value={credTitle} onChange={(e) => setCredTitle(e.target.value)} />
 
               <label className="small" style={{ marginTop: 8, display: "block" }}>
-                Recipient wallet addresses
+                Recipient list (paste or import)
               </label>
               <textarea
                 rows={6}
                 value={recipientsInput}
                 onChange={(e) => setRecipientsInput(e.target.value)}
-                placeholder="Paste 0x... addresses (one per line or comma-separated)"
+                placeholder="Paste recipients (one per line or comma-separated)"
               />
               <p className="small">
                 Valid recipients: {validRecipients.length}. {invalidRecipients.length ? `Invalid: ${invalidRecipients.length}` : "All entries look valid."}
@@ -634,31 +653,7 @@ export default function Issue() {
               <input type="file" accept=".csv,text/csv" onChange={handleRecipientsFileChange} />
 
               <label className="small" style={{ marginTop: 12, display: "block" }}>
-                Additional allowed wallets (optional)
-              </label>
-              <textarea
-                rows={3}
-                value={extraAccessInput}
-                onChange={(e) => setExtraAccessInput(e.target.value)}
-                placeholder="0x... extra wallets who can open the attachment"
-              />
-              {invalidAccess.length > 0 && (
-                <p className="small">
-                  Invalid allowlist entries: {invalidAccess.slice(0, 5).join(", ")}
-                  {invalidAccess.length > 5 ? "..." : ""}
-                </p>
-              )}
-              <p className="small">Recipients can always open the attachment. Add extra wallets only if needed.</p>
-              <p className="small">This gate hides the download button in the app. Anyone with the link can still access the file.</p>
-
-              <label className="small" style={{ marginTop: 8, display: "block" }}>
-                Attachment link (optional)
-              </label>
-              <input value={docRef} onChange={(e) => setDocRef(e.target.value)} placeholder="Added after upload (or paste a link)" />
-              <p className="small">If you upload a file, we will add the link automatically.</p>
-
-              <label className="small" style={{ marginTop: 12, display: "block" }}>
-                Attach file (stored on Walrus)
+                Attachment (optional)
               </label>
               <input
                 type="file"
@@ -669,12 +664,61 @@ export default function Issue() {
                   setUploadMsg("");
                 }}
               />
+              <p className="small">If you upload a file, we will attach the link automatically.</p>
 
               <button className="btn" style={{ marginTop: 8 }} disabled={!selectedFile || isUploading} onClick={uploadToWalrus}>
                 {isUploading ? "Uploading..." : "Upload to Walrus"}
               </button>
               {uploadMsg && <p className="small" style={{ marginTop: 8 }}>{uploadMsg}</p>}
               {uploadError && <p className="small" style={{ marginTop: 8 }}>{uploadError}</p>}
+
+              <div style={{ marginTop: 12 }}>
+                <button
+                  className="btn secondary"
+                  style={{ padding: "6px 10px", fontSize: 12 }}
+                  onClick={() => setShowIssueAdvanced((prev) => !prev)}
+                >
+                  {showIssueAdvanced ? "Hide advanced options" : "Advanced options"}
+                </button>
+              </div>
+
+              {showIssueAdvanced && (
+                <div style={{ marginTop: 12 }}>
+                  <label className="small">Group size (recipients per approval)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={chunkSize}
+                    onChange={(e) => setChunkSize(Math.max(1, Number(e.target.value) || 1))}
+                  />
+                  <p className="small">Smaller groups are safer but require more wallet approvals.</p>
+
+                  <label className="small" style={{ marginTop: 12, display: "block" }}>
+                    Additional allowed wallets (optional)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={extraAccessInput}
+                    onChange={(e) => setExtraAccessInput(e.target.value)}
+                    placeholder="Paste extra recipients"
+                  />
+                  {invalidAccess.length > 0 && (
+                    <p className="small">
+                      Invalid allowlist entries: {invalidAccess.slice(0, 5).join(", ")}
+                      {invalidAccess.length > 5 ? "..." : ""}
+                    </p>
+                  )}
+                  <p className="small">Recipients can always open the attachment. Add extra wallets only if needed.</p>
+                  <p className="small">This gate hides the download button in the app. Anyone with the link can still access the file.</p>
+
+                  <label className="small" style={{ marginTop: 12, display: "block" }}>
+                    Attachment link (advanced)
+                  </label>
+                  <input value={docRef} onChange={(e) => setDocRef(e.target.value)} placeholder="Paste an existing attachment link" />
+                  <p className="small">Use this only if you already have a link and do not want to upload.</p>
+                </div>
+              )}
 
               {bulkProgress && (
                 <p className="small" style={{ marginTop: 8 }}>

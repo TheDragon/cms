@@ -34,6 +34,7 @@ function formatIssuedAt(value: unknown): string {
 export default function Verify() {
   const account = useCurrentAccount();
   const [registryId, setRegistryId] = useState(() => getRegistryId());
+  const [showRevocationAdvanced, setShowRevocationAdvanced] = useState(false);
 
   const ownedQuery = useSuiClientQuery(
     "getOwnedObjects",
@@ -78,16 +79,27 @@ export default function Verify() {
 
       {!!account && (
         <div style={{ marginTop: 12 }}>
-          <label className="small">Organization ID (optional, for revocation checks)</label>
-          <input
-            value={registryId}
-            onChange={(e) => {
-              setRegistryId(e.target.value);
-              setStoredRegistryId(e.target.value);
-            }}
-            placeholder="0x... organization id"
-          />
-          <p className="small">Ask the issuer for this ID if you want revocation status.</p>
+          <button
+            className="btn secondary"
+            style={{ padding: "6px 10px", fontSize: 12 }}
+            onClick={() => setShowRevocationAdvanced((prev) => !prev)}
+          >
+            {showRevocationAdvanced ? "Hide revocation check" : "Check revocation status (optional)"}
+          </button>
+          {showRevocationAdvanced && (
+            <div style={{ marginTop: 12 }}>
+              <label className="small">Organization ID</label>
+              <input
+                value={registryId}
+                onChange={(e) => {
+                  setRegistryId(e.target.value);
+                  setStoredRegistryId(e.target.value);
+                }}
+                placeholder="0x... organization id"
+              />
+              <p className="small">Ask the issuer for this ID if you want revocation status.</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -172,7 +184,7 @@ export default function Verify() {
         </p>
       )}
 
-      {!!account && (
+      {!!account && showRevocationAdvanced && (
         <div className="card" style={{ marginTop: 12 }}>
           <h3 style={{ marginTop: 0 }}>How revocation is checked</h3>
           <p className="small">We read the organization list and see if your certificate ID is revoked.</p>

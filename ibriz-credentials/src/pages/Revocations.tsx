@@ -11,6 +11,7 @@ function target(fn: string) {
 export default function Revocations() {
   const account = useCurrentAccount();
   const [registryId, setRegistryId] = useState(() => getRegistryId());
+  const [showOrgAdvanced, setShowOrgAdvanced] = useState(false);
   const [credentialId, setCredentialId] = useState("");
   const [msg, setMsg] = useState("");
   const [lastTx, setLastTx] = useState<string | null>(null);
@@ -71,22 +72,35 @@ export default function Revocations() {
         </p>
       )}
 
-      <div className="row" style={{ marginTop: 12 }}>
-        <div>
-          <label className="small">Organization ID (shared list)</label>
-          <input
-            value={registryId}
-            onChange={(e) => {
-              setRegistryId(e.target.value);
-              setStoredRegistryId(e.target.value);
-            }}
-            placeholder="0x... organization id"
-          />
-        </div>
-        <div>
-          <label className="small">Certificate ID to revoke</label>
-          <input value={credentialId} onChange={(e) => setCredentialId(e.target.value)} placeholder="0x... certificate id" />
-        </div>
+      <div style={{ marginTop: 12 }}>
+        <p className="small">
+          Organization saved in this browser: {registryId ? <span className="badge ok">Yes</span> : <span className="badge">Not yet</span>}
+        </p>
+        <button
+          className="btn secondary"
+          style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }}
+          onClick={() => setShowOrgAdvanced((prev) => !prev)}
+        >
+          {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
+        </button>
+        {showOrgAdvanced && (
+          <div style={{ marginTop: 12 }}>
+            <label className="small">Organization ID (shared list)</label>
+            <input
+              value={registryId}
+              onChange={(e) => {
+                setRegistryId(e.target.value);
+                setStoredRegistryId(e.target.value);
+              }}
+              placeholder="0x... organization id"
+            />
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <label className="small">Certificate ID to revoke</label>
+        <input value={credentialId} onChange={(e) => setCredentialId(e.target.value)} placeholder="0x... certificate id" />
       </div>
 
       <button className="btn" style={{ marginTop: 12 }} disabled={!account || !isIssuer || isPending} onClick={revoke}>

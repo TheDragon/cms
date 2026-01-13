@@ -53,7 +53,7 @@ export default function App() {
     },
     verify: {
       title: "Viewer tips",
-      items: ["Wallet required", "Certificates load automatically", "Use the organization ID to check revocations"],
+      items: ["Wallet required", "Certificates load automatically", "Optional revocation check in advanced settings"],
       note: "Attachments open only when your wallet is on the access list.",
     },
     revoke: {
