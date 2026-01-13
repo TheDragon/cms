@@ -103,8 +103,8 @@ export default function Issue() {
   const [showProgramAdvanced, setShowProgramAdvanced] = useState(false);
   const [showIssueAdvanced, setShowIssueAdvanced] = useState(false);
 
-  const [ctxTitle, setCtxTitle] = useState("ABC Certificate Program");
-  const [ctxDesc, setCtxDesc] = useState("Issued by iBriz");
+  const [ctxTitle, setCtxTitle] = useState("");
+  const [ctxDesc, setCtxDesc] = useState("");
   const [contextId, setContextId] = useState("");
 
   const [recipientsInput, setRecipientsInput] = useState("");
@@ -122,6 +122,8 @@ export default function Issue() {
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [showProgramHistory, setShowProgramHistory] = useState(false);
+  const [prefillEnabled, setPrefillEnabled] = useState(true);
+  const [isProgramLocked, setIsProgramLocked] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ total: number; completed: number; chunk: number; chunks: number } | null>(null);
   const [bulkErrors, setBulkErrors] = useState<string[]>([]);
   const [isBulkIssuing, setIsBulkIssuing] = useState(false);
@@ -159,6 +161,7 @@ export default function Issue() {
   const issueReady = adminReady && batchReady && validRecipients.length > 0 && invalidRecipients.length === 0 && invalidAccess.length === 0;
   const step2Enabled = adminReady;
   const step3Enabled = adminReady && batchReady;
+  const showCreateProgram = !isProgramLocked && historyLoaded;
   const issueCount = validRecipients.length;
   const issueTargetLabel = issueCount === 1 ? "recipient" : "recipients";
   const issueLabel = selectedFile ? `Upload and issue to ${issueCount} ${issueTargetLabel}` : `Issue to ${issueCount} ${issueTargetLabel}`;
@@ -178,6 +181,8 @@ export default function Issue() {
     setProgramHistory([]);
     setHistoryMsg("");
     setShowProgramHistory(false);
+    setPrefillEnabled(true);
+    setIsProgramLocked(false);
   }, [account?.address]);
 
   async function copyToClipboard(label: string, value: string) {
@@ -231,9 +236,7 @@ export default function Issue() {
         options: { showEvents: true, showObjectChanges: true },
       });
       const blockChanges: any[] = (txBlock as any).objectChanges || [];
-      const createdFromBlock = blockChanges.find(
-        (c) => c.type === "created" && typeof c.objectType === "string" && c.objectType.includes("::Registry") && (c.owner?.Shared || c.owner?.shared)
-      );
+      const createdFromBlock = blockChanges.find((c) => c.type === "created" && typeof c.objectType === "string" && c.objectType.includes("::Registry") && (c.owner?.Shared || c.owner?.shared));
       const eventFromBlock = getEventField(txBlock, "::IssuerCreated", ["registry_id", "registryId"]);
       resolvedRegistryId = createdFromBlock?.objectId || eventFromBlock || "";
     } catch (err) {
@@ -257,6 +260,7 @@ export default function Issue() {
   async function createContext() {
     if (!account || !issuerCapId) return;
     setMsg("");
+    setPrefillEnabled(false);
 
     const tx = new Transaction();
     tx.moveCall({
@@ -299,6 +303,7 @@ export default function Issue() {
 
     if (nextContextId) {
       setContextId(nextContextId);
+      setIsProgramLocked(true);
       setMsg("Program created and linked to this browser.");
     } else if (fetchError) {
       setMsg(`Program created, but we could not find the ID. ${fetchError}`);
@@ -322,10 +327,7 @@ export default function Issue() {
       const contextEventType = `${PACKAGE_ID}::${MODULE}::ContextCreated`;
       const credentialEventType = `${PACKAGE_ID}::${MODULE}::CredentialIssued`;
 
-      const [contextRes, credentialRes] = await Promise.all([
-        client.queryEvents({ query: { MoveEventType: contextEventType }, limit: HISTORY_EVENT_LIMIT }),
-        client.queryEvents({ query: { MoveEventType: credentialEventType }, limit: HISTORY_EVENT_LIMIT }),
-      ]);
+      const [contextRes, credentialRes] = await Promise.all([client.queryEvents({ query: { MoveEventType: contextEventType }, limit: HISTORY_EVENT_LIMIT }), client.queryEvents({ query: { MoveEventType: credentialEventType }, limit: HISTORY_EVENT_LIMIT })]);
 
       const contextEvents = (contextRes as any)?.data ?? [];
       const credentialEvents = (credentialRes as any)?.data ?? [];
@@ -378,9 +380,17 @@ export default function Issue() {
 
       setProgramHistory(items);
 
-      let summary = items.length
-        ? `Loaded ${items.length} program${items.length === 1 ? "" : "s"} from the latest on-chain events.`
-        : "No programs found for this wallet yet.";
+      if (prefillEnabled && !contextId && items.length > 0) {
+        const latest = items[0];
+        setContextId(latest.id);
+        setCtxTitle(latest.title);
+        setCtxDesc(latest.description || "");
+        setMsg("Loaded your most recent program.");
+        setIsProgramLocked(true);
+        setPrefillEnabled(false);
+      }
+
+      let summary = items.length ? `Loaded ${items.length} program${items.length === 1 ? "" : "s"} from the latest on-chain events.` : "No programs found for this wallet yet.";
       if ((contextRes as any)?.hasNextPage || (credentialRes as any)?.hasNextPage) {
         summary += " Showing the latest results only.";
       }
@@ -391,13 +401,13 @@ export default function Issue() {
       setIsHistoryLoading(false);
       setHistoryLoaded(true);
     }
-  }, [account, client]);
+  }, [account, client, contextId, prefillEnabled]);
 
   useEffect(() => {
     if (activeStep !== 2) return;
-    if (!account || !isIssuer || historyLoaded || !showProgramHistory) return;
+    if (!account || !isIssuer || historyLoaded) return;
     loadProgramHistory();
-  }, [activeStep, account, isIssuer, historyLoaded, loadProgramHistory, showProgramHistory]);
+  }, [activeStep, account, isIssuer, historyLoaded, loadProgramHistory]);
 
   async function issueCredentialsBulk() {
     if (!account || !issuerCapId) return;
@@ -440,14 +450,7 @@ export default function Issue() {
           const docRefForRecipient = buildDocRefForRecipient(baseDocRef, extraAccess);
           tx.moveCall({
             target: target("issue_credential"),
-            arguments: [
-              capObj,
-              registryObj,
-              contextObj,
-              tx.pure.address(recipient),
-              tx.pure.string(credTitle),
-              tx.pure.string(docRefForRecipient),
-            ],
+            arguments: [capObj, registryObj, contextObj, tx.pure.address(recipient), tx.pure.string(credTitle), tx.pure.string(docRefForRecipient)],
           });
         }
 
@@ -518,50 +521,20 @@ export default function Issue() {
         blobId = data.trim();
       } else if (data && typeof data === "object") {
         const top = data;
-        const newlyCreated =
-          top?.newlyCreated ||
-          top?.newly_created ||
-          top?.blobStoreResult?.newlyCreated ||
-          top?.blobStoreResult?.newly_created ||
-          null;
-        const alreadyCertified =
-          top?.alreadyCertified ||
-          top?.already_certified ||
-          top?.blobStoreResult?.alreadyCertified ||
-          top?.blobStoreResult?.already_certified ||
-          null;
+        const newlyCreated = top?.newlyCreated || top?.newly_created || top?.blobStoreResult?.newlyCreated || top?.blobStoreResult?.newly_created || null;
+        const alreadyCertified = top?.alreadyCertified || top?.already_certified || top?.blobStoreResult?.alreadyCertified || top?.blobStoreResult?.already_certified || null;
 
         const blobObject = newlyCreated?.blobObject || newlyCreated?.blob_object || null;
 
-        blobId =
-          top.blobId ||
-          top.blob_id ||
-          top?.result?.blobId ||
-          top?.result?.blob_id ||
-          blobObject?.blobId ||
-          blobObject?.blob_id ||
-          alreadyCertified?.blob_id ||
-          alreadyCertified?.blobId ||
-          "";
-        objectId =
-          top.id ||
-          top?.result?.id ||
-          blobObject?.id ||
-          alreadyCertified?.object ||
-          "";
+        blobId = top.blobId || top.blob_id || top?.result?.blobId || top?.result?.blob_id || blobObject?.blobId || blobObject?.blob_id || alreadyCertified?.blob_id || alreadyCertified?.blobId || "";
+        objectId = top.id || top?.result?.id || blobObject?.id || alreadyCertified?.object || "";
       }
 
       if (!blobId && !objectId) {
         throw new Error("Upload completed, but we could not link the file. Please try again.");
       }
 
-      const walrusRefBase = blobId
-        ? blobId.startsWith("walrus://")
-          ? blobId
-          : `walrus://${blobId}`
-        : objectId.startsWith("walrus-object://")
-          ? objectId
-          : `walrus-object://${objectId}`;
+      const walrusRefBase = blobId ? (blobId.startsWith("walrus://") ? blobId : `walrus://${blobId}`) : objectId.startsWith("walrus-object://") ? objectId : `walrus-object://${objectId}`;
       const walrusRef = applyWalrusMeta(walrusRefBase, { name: encodedName, mime: encodedMime });
       setDocRef(walrusRef);
       setUploadMsg(`Uploaded "${selectedFile.name}". Attachment link saved.`);
@@ -592,20 +565,10 @@ export default function Issue() {
         <button type="button" className={`step-tab ${activeStep === 1 ? "active" : ""}`} onClick={() => setActiveStep(1)}>
           Step 1: Organization
         </button>
-        <button
-          type="button"
-          className={`step-tab ${activeStep === 2 ? "active" : ""}`}
-          disabled={!step2Enabled}
-          onClick={() => setActiveStep(2)}
-        >
+        <button type="button" className={`step-tab ${activeStep === 2 ? "active" : ""}`} disabled={!step2Enabled} onClick={() => setActiveStep(2)}>
           Step 2: Program
         </button>
-        <button
-          type="button"
-          className={`step-tab ${activeStep === 3 ? "active" : ""}`}
-          disabled={!step3Enabled}
-          onClick={() => setActiveStep(3)}
-        >
+        <button type="button" className={`step-tab ${activeStep === 3 ? "active" : ""}`} disabled={!step3Enabled} onClick={() => setActiveStep(3)}>
           Step 3: Issue
         </button>
       </div>
@@ -643,14 +606,8 @@ export default function Issue() {
             </div>
 
             <div style={{ marginTop: 12 }}>
-              <p className="small">
-                Organization saved in this browser: {localRegistry ? <span className="badge ok">Yes</span> : <span className="badge">Not yet</span>}
-              </p>
-              <button
-                className="btn secondary"
-                style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }}
-                onClick={() => setShowOrgAdvanced((prev) => !prev)}
-              >
+              <p className="small">Organization saved in this browser: {localRegistry ? <span className="badge ok">Yes</span> : <span className="badge">Not yet</span>}</p>
+              <button className="btn secondary" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => setShowOrgAdvanced((prev) => !prev)}>
                 {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
               </button>
             </div>
@@ -666,9 +623,7 @@ export default function Issue() {
                   }}
                   placeholder="0x... organization id"
                 />
-                <p className="small">
-                  Current organization ID: {localRegistry ? <span className="badge">{localRegistry}</span> : <span className="badge">not set</span>}
-                </p>
+                <p className="small">Current organization ID: {localRegistry ? <span className="badge">{localRegistry}</span> : <span className="badge">not set</span>}</p>
                 {localRegistry && (
                   <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Organization ID", localRegistry)}>
                     Copy organization ID
@@ -699,25 +654,56 @@ export default function Issue() {
 
             <div style={{ marginTop: 12 }}>
               <label className="small">Program title</label>
-              <input value={ctxTitle} onChange={(e) => setCtxTitle(e.target.value)} />
+              <input
+                value={ctxTitle}
+                readOnly={isProgramLocked}
+                onChange={(e) => {
+                  setCtxTitle(e.target.value);
+                  setPrefillEnabled(false);
+                }}
+              />
               <label className="small" style={{ marginTop: 8, display: "block" }}>
                 Description
               </label>
-              <input value={ctxDesc} onChange={(e) => setCtxDesc(e.target.value)} />
+              <input
+                value={ctxDesc}
+                readOnly={isProgramLocked}
+                onChange={(e) => {
+                  setCtxDesc(e.target.value);
+                  setPrefillEnabled(false);
+                }}
+              />
 
-              <button className="btn" style={{ marginTop: 12 }} disabled={!account || !isIssuer || isPending} onClick={createContext}>
-                Create program
-              </button>
-
-              <div style={{ marginTop: 12 }}>
-                <p className="small">
-                  Program saved in this browser: {contextId ? <span className="badge ok">Yes</span> : <span className="badge">Not yet</span>}
-                </p>
+              {showCreateProgram && (
+                <button className="btn" style={{ marginTop: 12 }} disabled={!account || !isIssuer || isPending} onClick={createContext}>
+                  Create program
+                </button>
+              )}
+              {isProgramLocked && (
                 <button
                   className="btn secondary"
-                  style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }}
-                  onClick={() => setShowProgramAdvanced((prev) => !prev)}
+                  style={{ marginTop: 12, padding: "6px 10px", fontSize: 12 }}
+                  onClick={() => {
+                    setContextId("");
+                    setCtxTitle("");
+                    setCtxDesc("");
+                    setPrefillEnabled(false);
+                    setIsProgramLocked(false);
+                    setMsg("Ready to create a new program.");
+                  }}
                 >
+                  Create a new program
+                </button>
+              )}
+              {isProgramLocked ? (
+                <p className="small">This program is loaded from history. Create a new one if you need different details.</p>
+              ) : (
+                <p className="small">Create a new program when you want a fresh set of certificates.</p>
+              )}
+
+              <div style={{ marginTop: 12 }}>
+                <p className="small">Program saved in this browser: {contextId ? <span className="badge ok">Yes</span> : <span className="badge">Not yet</span>}</p>
+                <button className="btn secondary" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => setShowProgramAdvanced((prev) => !prev)}>
                   {showProgramAdvanced ? "Hide advanced options" : "Advanced options"}
                 </button>
               </div>
@@ -725,10 +711,18 @@ export default function Issue() {
               {showProgramAdvanced && (
                 <div style={{ marginTop: 12 }}>
                   <label className="small">Program ID</label>
-                  <input value={contextId} onChange={(e) => setContextId(e.target.value)} placeholder="0x... program id" />
-                  <p className="small">
-                    Current program ID: {contextId ? <span className="badge">{contextId}</span> : <span className="badge">not set</span>}
-                  </p>
+                  <input
+                    value={contextId}
+                    readOnly={isProgramLocked}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setContextId(next);
+                      setPrefillEnabled(false);
+                      setIsProgramLocked(!!next);
+                    }}
+                    placeholder="0x... program id"
+                  />
+                  <p className="small">Current program ID: {contextId ? <span className="badge">{contextId}</span> : <span className="badge">not set</span>}</p>
                   {contextId && (
                     <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Program ID", contextId)}>
                       Copy program ID
@@ -747,23 +741,14 @@ export default function Issue() {
                     Use past programs as templates when you want to reissue a familiar setup.
                   </p>
                 </div>
-                <button
-                  className="btn secondary"
-                  style={{ padding: "6px 10px", fontSize: 12 }}
-                  onClick={() => setShowProgramHistory((prev) => !prev)}
-                >
+                <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowProgramHistory((prev) => !prev)}>
                   {showProgramHistory ? "Hide history" : "Show history"}
                 </button>
               </div>
 
               {showProgramHistory && (
                 <div style={{ marginTop: 12 }}>
-                  <button
-                    className="btn secondary"
-                    style={{ padding: "6px 10px", fontSize: 12 }}
-                    disabled={!account || !isIssuer || isHistoryLoading}
-                    onClick={loadProgramHistory}
-                  >
+                  <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={!account || !isIssuer || isHistoryLoading} onClick={loadProgramHistory}>
                     {isHistoryLoading ? "Loading history..." : historyLoaded ? "Refresh history" : "Load history"}
                   </button>
                   {historyMsg && (
@@ -776,7 +761,11 @@ export default function Issue() {
                       {programHistory.map((item) => (
                         <div key={item.id} className="card">
                           <h4 style={{ margin: 0 }}>{item.title}</h4>
-                          {item.description && <p className="small" style={{ marginTop: 6 }}>{item.description}</p>}
+                          {item.description && (
+                            <p className="small" style={{ marginTop: 6 }}>
+                              {item.description}
+                            </p>
+                          )}
                           <p className="small" style={{ marginTop: 8 }}>
                             Issued so far: <span className="badge">{item.issuedCount}</span>
                           </p>
@@ -789,6 +778,8 @@ export default function Issue() {
                               setContextId(item.id);
                               setCtxTitle(item.title);
                               setCtxDesc(item.description || "");
+                              setPrefillEnabled(false);
+                              setIsProgramLocked(true);
                               setMsg("Program selected. You can issue certificates now.");
                             }}
                           >
@@ -831,12 +822,7 @@ export default function Issue() {
               <label className="small" style={{ marginTop: 8, display: "block" }}>
                 Recipient list (paste or import)
               </label>
-              <textarea
-                rows={6}
-                value={recipientsInput}
-                onChange={(e) => setRecipientsInput(e.target.value)}
-                placeholder="Paste recipients (one per line or comma-separated)"
-              />
+              <textarea rows={6} value={recipientsInput} onChange={(e) => setRecipientsInput(e.target.value)} placeholder="Paste recipients (one per line or comma-separated)" />
               <p className="small">
                 Valid recipients: {validRecipients.length}. {invalidRecipients.length ? `Invalid: ${invalidRecipients.length}` : "All entries look valid."}
               </p>
@@ -873,7 +859,9 @@ export default function Issue() {
                 <div className="card" style={{ marginTop: 12, padding: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                     <div>
-                      <p className="small" style={{ margin: 0 }}>Selected file</p>
+                      <p className="small" style={{ margin: 0 }}>
+                        Selected file
+                      </p>
                       <p style={{ margin: "4px 0 0", fontWeight: 600 }}>{selectedFile.name}</p>
                       <p className="small" style={{ marginTop: 4 }}>
                         {selectedFile.type || "Unknown type"} - {formatFileSize(selectedFile.size)}
@@ -899,20 +887,8 @@ export default function Issue() {
                       </button>
                     </div>
                   </div>
-                  {previewUrl && selectedFile.type.startsWith("image/") && (
-                    <img
-                      src={previewUrl}
-                      alt="Attachment preview"
-                      style={{ width: "100%", marginTop: 12, borderRadius: 12, border: "1px solid var(--stroke)" }}
-                    />
-                  )}
-                  {previewUrl && selectedFile.type === "application/pdf" && (
-                    <iframe
-                      title="Attachment preview"
-                      src={previewUrl}
-                      style={{ width: "100%", marginTop: 12, borderRadius: 12, border: "1px solid var(--stroke)", height: 280 }}
-                    />
-                  )}
+                  {previewUrl && selectedFile.type.startsWith("image/") && <img src={previewUrl} alt="Attachment preview" style={{ width: "100%", marginTop: 12, borderRadius: 12, border: "1px solid var(--stroke)" }} />}
+                  {previewUrl && selectedFile.type === "application/pdf" && <iframe title="Attachment preview" src={previewUrl} style={{ width: "100%", marginTop: 12, borderRadius: 12, border: "1px solid var(--stroke)", height: 280 }} />}
                   {previewUrl && !selectedFile.type.startsWith("image/") && selectedFile.type !== "application/pdf" && (
                     <p className="small" style={{ marginTop: 8 }}>
                       Preview not available for this file type.
@@ -921,15 +897,19 @@ export default function Issue() {
                 </div>
               )}
 
-              {uploadMsg && <p className="small" style={{ marginTop: 8 }}>{uploadMsg}</p>}
-              {uploadError && <p className="small" style={{ marginTop: 8 }}>{uploadError}</p>}
+              {uploadMsg && (
+                <p className="small" style={{ marginTop: 8 }}>
+                  {uploadMsg}
+                </p>
+              )}
+              {uploadError && (
+                <p className="small" style={{ marginTop: 8 }}>
+                  {uploadError}
+                </p>
+              )}
 
               <div style={{ marginTop: 12 }}>
-                <button
-                  className="btn secondary"
-                  style={{ padding: "6px 10px", fontSize: 12 }}
-                  onClick={() => setShowIssueAdvanced((prev) => !prev)}
-                >
+                <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowIssueAdvanced((prev) => !prev)}>
                   {showIssueAdvanced ? "Hide advanced options" : "Advanced options"}
                 </button>
               </div>
@@ -937,24 +917,13 @@ export default function Issue() {
               {showIssueAdvanced && (
                 <div style={{ marginTop: 12 }}>
                   <label className="small">Group size (recipients per approval)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={chunkSize}
-                    onChange={(e) => setChunkSize(Math.max(1, Number(e.target.value) || 1))}
-                  />
+                  <input type="number" min={1} max={50} value={chunkSize} onChange={(e) => setChunkSize(Math.max(1, Number(e.target.value) || 1))} />
                   <p className="small">Smaller groups are safer but require more wallet approvals.</p>
 
                   <label className="small" style={{ marginTop: 12, display: "block" }}>
                     Additional allowed wallets (optional)
                   </label>
-                  <textarea
-                    rows={3}
-                    value={extraAccessInput}
-                    onChange={(e) => setExtraAccessInput(e.target.value)}
-                    placeholder="Paste extra recipients"
-                  />
+                  <textarea rows={3} value={extraAccessInput} onChange={(e) => setExtraAccessInput(e.target.value)} placeholder="Paste extra recipients" />
                   {invalidAccess.length > 0 && (
                     <p className="small">
                       Invalid allowlist entries: {invalidAccess.slice(0, 5).join(", ")}
@@ -977,9 +946,7 @@ export default function Issue() {
                   Progress: {bulkProgress.completed}/{bulkProgress.total} (chunk {bulkProgress.chunk}/{bulkProgress.chunks})
                 </p>
               )}
-              {bulkErrors.length > 0 && (
-                <pre style={{ marginTop: 8 }}>{bulkErrors.join("\n")}</pre>
-              )}
+              {bulkErrors.length > 0 && <pre style={{ marginTop: 8 }}>{bulkErrors.join("\n")}</pre>}
 
               <div className="step-actions">
                 <button className="btn secondary" onClick={() => setActiveStep(2)}>
