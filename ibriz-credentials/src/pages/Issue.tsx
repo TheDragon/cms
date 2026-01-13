@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChangeEvent } from "react";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient, useSuiClientQuery } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
@@ -120,6 +120,8 @@ export default function Issue() {
   const [programHistory, setProgramHistory] = useState<ProgramHistoryItem[]>([]);
   const [historyMsg, setHistoryMsg] = useState("");
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [showProgramHistory, setShowProgramHistory] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ total: number; completed: number; chunk: number; chunks: number } | null>(null);
   const [bulkErrors, setBulkErrors] = useState<string[]>([]);
   const [isBulkIssuing, setIsBulkIssuing] = useState(false);
@@ -170,6 +172,13 @@ export default function Issue() {
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [selectedFile]);
+
+  useEffect(() => {
+    setHistoryLoaded(false);
+    setProgramHistory([]);
+    setHistoryMsg("");
+    setShowProgramHistory(false);
+  }, [account?.address]);
 
   async function copyToClipboard(label: string, value: string) {
     if (!value) return;
@@ -298,7 +307,7 @@ export default function Issue() {
     }
   }
 
-  async function loadProgramHistory() {
+  const loadProgramHistory = useCallback(async () => {
     if (!account) {
       setHistoryMsg("Connect your wallet to load program history.");
       return;
@@ -380,8 +389,15 @@ export default function Issue() {
       setHistoryMsg(`Unable to load program history. ${String(err)}`);
     } finally {
       setIsHistoryLoading(false);
+      setHistoryLoaded(true);
     }
-  }
+  }, [account, client]);
+
+  useEffect(() => {
+    if (activeStep !== 2) return;
+    if (!account || !isIssuer || historyLoaded || !showProgramHistory) return;
+    loadProgramHistory();
+  }, [activeStep, account, isIssuer, historyLoaded, loadProgramHistory, showProgramHistory]);
 
   async function issueCredentialsBulk() {
     if (!account || !issuerCapId) return;
@@ -724,29 +740,64 @@ export default function Issue() {
             </div>
 
             <div style={{ marginTop: 16 }}>
-              <h4 style={{ margin: 0 }}>Program history</h4>
-              <p className="small">Load a best-effort list of programs and issued counts from recent events.</p>
-              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={!account || !isIssuer || isHistoryLoading} onClick={loadProgramHistory}>
-                {isHistoryLoading ? "Loading history..." : "Load program history"}
-              </button>
-              {historyMsg && (
-                <p className="small" style={{ marginTop: 8 }}>
-                  {historyMsg}
-                </p>
-              )}
-              {programHistory.length > 0 && (
-                <div className="cards-grid" style={{ marginTop: 12 }}>
-                  {programHistory.map((item) => (
-                    <div key={item.id} className="card">
-                      <h4 style={{ margin: 0 }}>{item.title}</h4>
-                      {item.description && <p className="small" style={{ marginTop: 6 }}>{item.description}</p>}
-                      <p className="small" style={{ marginTop: 8 }}>
-                        Issued so far: <span className="badge">{item.issuedCount}</span>
-                      </p>
-                      <p className="small">Program ID</p>
-                      <pre>{item.id}</pre>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <h4 style={{ margin: 0 }}>Program history</h4>
+                  <p className="small" style={{ marginTop: 6 }}>
+                    Use past programs as templates when you want to reissue a familiar setup.
+                  </p>
+                </div>
+                <button
+                  className="btn secondary"
+                  style={{ padding: "6px 10px", fontSize: 12 }}
+                  onClick={() => setShowProgramHistory((prev) => !prev)}
+                >
+                  {showProgramHistory ? "Hide history" : "Show history"}
+                </button>
+              </div>
+
+              {showProgramHistory && (
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    className="btn secondary"
+                    style={{ padding: "6px 10px", fontSize: 12 }}
+                    disabled={!account || !isIssuer || isHistoryLoading}
+                    onClick={loadProgramHistory}
+                  >
+                    {isHistoryLoading ? "Loading history..." : historyLoaded ? "Refresh history" : "Load history"}
+                  </button>
+                  {historyMsg && (
+                    <p className="small" style={{ marginTop: 8 }}>
+                      {historyMsg}
+                    </p>
+                  )}
+                  {programHistory.length > 0 && (
+                    <div className="cards-grid" style={{ marginTop: 12 }}>
+                      {programHistory.map((item) => (
+                        <div key={item.id} className="card">
+                          <h4 style={{ margin: 0 }}>{item.title}</h4>
+                          {item.description && <p className="small" style={{ marginTop: 6 }}>{item.description}</p>}
+                          <p className="small" style={{ marginTop: 8 }}>
+                            Issued so far: <span className="badge">{item.issuedCount}</span>
+                          </p>
+                          <p className="small">Program ID</p>
+                          <pre>{item.id}</pre>
+                          <button
+                            className="btn secondary"
+                            style={{ padding: "6px 10px", fontSize: 12 }}
+                            onClick={() => {
+                              setContextId(item.id);
+                              setCtxTitle(item.title);
+                              setCtxDesc(item.description || "");
+                              setMsg("Program selected. You can issue certificates now.");
+                            }}
+                          >
+                            Use this program
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
             </div>
