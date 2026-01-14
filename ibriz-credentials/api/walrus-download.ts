@@ -16,7 +16,7 @@ function decodeValue(value: string): string {
 
 export default async function handler(req: Request): Promise<Response> {
   const { searchParams } = new URL(req.url);
-  const urlParam = searchParams.get("url");
+  const urlParam = searchParams.get("source") || searchParams.get("url");
   const nameParam = searchParams.get("name") || "attachment";
 
   if (!urlParam) {
