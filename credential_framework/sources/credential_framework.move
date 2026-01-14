@@ -10,6 +10,8 @@ module credential_framework::credentials {
     const E_NOT_ISSUER: u64 = 0;
     const E_CONTEXT_ISSUER_MISMATCH: u64 = 1;
     const E_REGISTRY_ISSUER_MISMATCH: u64 = 2;
+    const E_REGISTRY_NAME_EMPTY: u64 = 3;
+    const E_REGISTRY_NAME_LOCKED: u64 = 4;
 
     /// Issuer admin capability (kept address-owned by the issuer)
     public struct IssuerCap has key {
@@ -96,6 +98,20 @@ module credential_framework::credentials {
         transfer::public_share_object(registry);
 
         event::emit(IssuerCreated { issuer, cap_id, registry_id });
+    }
+
+    /// 1b) update organization name
+    public entry fun update_registry_name(
+        cap: &IssuerCap,
+        registry: &mut Registry,
+        name: String,
+        ctx: &mut TxContext
+    ) {
+        assert_issuer(cap, ctx);
+        assert!(registry.issuer == cap.issuer, E_REGISTRY_ISSUER_MISMATCH);
+        assert!(string::length(&registry.name) == 0, E_REGISTRY_NAME_LOCKED);
+        assert!(string::length(&name) > 0, E_REGISTRY_NAME_EMPTY);
+        registry.name = name;
     }
 
     /// 2) create context (event/course/etc.)

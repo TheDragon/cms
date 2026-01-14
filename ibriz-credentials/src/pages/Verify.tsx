@@ -8,6 +8,8 @@ function normalizeAddress(value: string): string {
   return value.trim().toLowerCase();
 }
 
+const useProxyDownload = import.meta.env.PROD || import.meta.env.VITE_WALRUS_PROXY === "true";
+
 function safeDecode(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -182,8 +184,8 @@ export default function Verify() {
             const isRevoked = registryId ? revokedSet.has(normalizeAddress(id)) : false;
             const attachmentMime = walrusRef?.meta?.mime ? safeDecode(walrusRef.meta.mime) : "";
             const attachmentName = safeFilename(buildAttachmentName(walrusRef?.meta?.name ? safeDecode(walrusRef.meta.name) : "", attachmentMime));
-            const proxyUrl = walrusUrl
-              ? `/api/walrus-download?url=${encodeURIComponent(walrusUrl)}&name=${encodeURIComponent(attachmentName)}`
+            const proxyUrl = useProxyDownload && walrusUrl
+              ? `/api/walrus-download?source=${encodeURIComponent(walrusUrl)}&name=${encodeURIComponent(attachmentName)}`
               : "";
 
             return (

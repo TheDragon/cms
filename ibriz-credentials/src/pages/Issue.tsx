@@ -138,6 +138,8 @@ export default function Issue() {
   const [ctxDesc, setCtxDesc] = useState("");
   const [contextId, setContextId] = useState("");
   const [orgName, setOrgName] = useState("");
+  const [orgNameDraft, setOrgNameDraft] = useState("");
+  const [isOrgRenaming, setIsOrgRenaming] = useState(false);
 
   const [recipientsInput, setRecipientsInput] = useState("");
   const [extraAccessInput, setExtraAccessInput] = useState("");
@@ -219,6 +221,7 @@ export default function Issue() {
   const hasNamedOrg = !!currentOrgName.trim();
   const hasLegacyOrg = !!localRegistry && !hasNamedOrg;
   const walletAddress = account?.address ? normalizeAddress(account.address) : "";
+  const canSetOrgName = isIssuer && !!localRegistry && (!registryIssuer || registryIssuer === walletAddress);
   const showProgramHistoryPanel = activeStep === 2;
   const issueCount = validRecipients.length;
   const issueTargetLabel = issueCount === 1 ? "recipient" : "recipients";
@@ -260,6 +263,16 @@ export default function Issue() {
   useEffect(() => {
     setOrgCreatedAtMs(getOrgCreatedAt(localRegistry));
   }, [localRegistry]);
+
+  useEffect(() => {
+    setOrgNameDraft(currentOrgName);
+  }, [currentOrgName]);
+
+  useEffect(() => {
+    if (isIssuer) {
+      setShowOrgCreate(false);
+    }
+  }, [isIssuer]);
 
   useEffect(() => {
     setContextId("");
@@ -355,6 +368,10 @@ export default function Issue() {
 
   async function createIssuer() {
     if (!account) return;
+    if (isIssuer) {
+      setMsg("This wallet already has an organization profile. Use advanced options to link it here.");
+      return;
+    }
     const trimmedName = orgName.trim();
     if (!trimmedName) {
       setMsg("Add an organization name before creating the profile.");
@@ -400,6 +417,45 @@ export default function Issue() {
 
     // refresh cap query
     capQuery.refetch();
+  }
+
+  async function updateOrgName() {
+    if (!account || !issuerCapId) return;
+    if (!localRegistry) {
+      setMsg("Missing organization ID. Paste the organization ID first.");
+      return;
+    }
+    if (currentOrgName.trim()) {
+      setMsg("Organization name is already set and cannot be edited.");
+      return;
+    }
+    if (!canSetOrgName) {
+      setMsg("Only the issuing wallet can update the organization name.");
+      return;
+    }
+    const trimmedName = orgNameDraft.trim();
+    if (!trimmedName) {
+      setMsg("Organization name cannot be empty.");
+      return;
+    }
+    setIsOrgRenaming(true);
+    setMsg("");
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: target("update_registry_name"),
+        arguments: [tx.object(issuerCapId), tx.object(localRegistry), tx.pure.string(trimmedName)],
+      });
+      const res = await signAndExecute({ transaction: tx });
+      setLastTx(res.digest);
+      setOrgNameDraft(trimmedName);
+      setMsg("Organization name set.");
+      registryQuery.refetch();
+    } catch (err) {
+      setMsg(`Unable to update the organization name. ${String(err)}`);
+    } finally {
+      setIsOrgRenaming(false);
+    }
   }
 
   async function createContext() {
@@ -1017,42 +1073,68 @@ export default function Issue() {
                   <p className="small" style={{ margin: 0 }}>Current organization</p>
                   <p className="small" style={{ marginTop: 8 }}>
                     {hasLegacyOrg
-                      ? "A previous organization was found, but it has no name. Create a new organization to continue."
-                      : "No organization linked yet."}
+                      ? isIssuer
+                        ? "A previous organization was found, but it has no name yet. Add a name below."
+                        : "A previous organization was found, but it has no name. Create a new organization to continue."
+                      : isIssuer
+                        ? "This wallet already has an organization profile. Paste the organization ID in advanced options to link it here."
+                        : "No organization linked yet."}
+                  </p>
+                </div>
+              )}
+
+              {localRegistry && !hasNamedOrg && (
+                <div style={{ marginTop: 12 }}>
+                  <label className="small">Set organization name (one-time)</label>
+                  <input
+                    value={orgNameDraft}
+                    disabled={!canSetOrgName || registryQuery.isPending}
+                    onChange={(e) => {
+                      setOrgNameDraft(e.target.value);
+                    }}
+                    placeholder="e.g., Acme Academy"
+                  />
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                    <button className="btn" disabled={!canSetOrgName || !orgNameDraft.trim() || isPending || isOrgRenaming} onClick={updateOrgName}>
+                      Save name
+                    </button>
+                  </div>
+                  {!canSetOrgName && (
+                    <p className="small" style={{ marginTop: 6 }}>
+                      Only the issuing wallet can set the organization name.
+                    </p>
+                  )}
+                  <p className="small" style={{ marginTop: 6 }}>
+                    This is stored on-chain and cannot be edited later.
                   </p>
                 </div>
               )}
 
               <div style={{ marginTop: 12 }}>
-                {!showOrgCreate && (
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {!isIssuer && !showOrgCreate && (
                     <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowOrgCreate(true)}>
                       Create a new organization
                     </button>
-                    <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowOrgAdvanced((prev) => !prev)}>
-                      {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
-                    </button>
-                  </div>
+                  )}
+                  <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowOrgAdvanced((prev) => !prev)}>
+                    {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
+                  </button>
+                </div>
+                {isIssuer && !showOrgCreate && (
+                  <p className="small" style={{ marginTop: 8 }}>
+                    This wallet can have only one organization profile.
+                  </p>
                 )}
-                {showOrgCreate && (
+                {showOrgCreate && !isIssuer && (
                   <div style={{ marginTop: 8 }}>
                     <label className="small">Organization name</label>
                     <input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="e.g., Acme Academy" />
                     <p className="small">Used when creating a new organization profile. It does not rename an existing one.</p>
 
-                    {!isIssuer && (
-                      <button className="btn" disabled={!account || isPending || !orgName.trim()} onClick={createIssuer}>
-                        Create organization profile
-                      </button>
-                    )}
-                    {isIssuer && (
-                      <div>
-                        <button className="btn" disabled={!account || isPending || !orgName.trim()} onClick={createIssuer}>
-                          Create another organization profile
-                        </button>
-                        <p className="small">Use this if you want a separate profile for another organization.</p>
-                      </div>
-                    )}
+                    <button className="btn" disabled={!account || isPending || !orgName.trim()} onClick={createIssuer}>
+                      Create organization profile
+                    </button>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
                       <button
                         className="btn secondary"
