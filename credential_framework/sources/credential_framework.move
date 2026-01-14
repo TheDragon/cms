@@ -21,6 +21,7 @@ module credential_framework::credentials {
     public struct Registry has key, store {
         id: UID,
         issuer: address,
+        name: String,
         revoked: VecSet<address>,
     }
 
@@ -73,14 +74,15 @@ module credential_framework::credentials {
 
     /// 1) create issuer:
     /// - gives issuer an IssuerCap
-    /// - creates a shared Registry for revocation checks
-    public entry fun create_issuer(ctx: &mut TxContext) {
+    /// - creates a shared Registry (with organization name) for revocation checks
+    public entry fun create_issuer(name: String, ctx: &mut TxContext) {
         let issuer = tx_context::sender(ctx);
 
         let cap = IssuerCap { id: object::new(ctx), issuer };
         let registry = Registry {
             id: object::new(ctx),
             issuer,
+            name,
             revoked: vec_set::empty<address>(),
         };
 
