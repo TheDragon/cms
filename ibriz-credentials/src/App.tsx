@@ -119,21 +119,35 @@ export default function App() {
             {tab === "revoke" && <Revocations />}
           </section>
           <aside className="side-pane">
-            <div className="card">
-              <h3 style={{ marginTop: 0 }}>{tips.title}</h3>
-              <ul className="info-list">
-                {tips.items.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-              <p className="small">{tips.note}</p>
-            </div>
-            <div className="card" style={{ marginTop: 12 }}>
-              <h3 style={{ marginTop: 0 }}>Need help?</h3>
-              <p className="small">
-                If something is unclear, share the screen and we will walk through the steps together.
-              </p>
-            </div>
+            {tab === "issue" ? (
+              <>
+                <div id="issue-sidebar" />
+                <div className="card" style={{ marginTop: 12 }}>
+                  <h3 style={{ marginTop: 0 }}>Need help?</h3>
+                  <p className="small">
+                    If something is unclear, share the screen and we will walk through the steps together.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="card">
+                  <h3 style={{ marginTop: 0 }}>{tips.title}</h3>
+                  <ul className="info-list">
+                    {tips.items.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                  <p className="small">{tips.note}</p>
+                </div>
+                <div className="card" style={{ marginTop: 12 }}>
+                  <h3 style={{ marginTop: 0 }}>Need help?</h3>
+                  <p className="small">
+                    If something is unclear, share the screen and we will walk through the steps together.
+                  </p>
+                </div>
+              </>
+            )}
           </aside>
         </div>
       </main>

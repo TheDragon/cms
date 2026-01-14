@@ -16,6 +16,54 @@ function safeDecode(value: string): string {
   }
 }
 
+function safeFilename(value: string): string {
+  return value.replace(/[\\/:*?"<>|]+/g, "_");
+}
+
+function guessExtensionFromMime(mime: string): string {
+  if (!mime) return "";
+  const normalized = mime.split(";")[0].trim().toLowerCase();
+  const map: Record<string, string> = {
+    "application/pdf": "pdf",
+    "application/json": "json",
+    "application/zip": "zip",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "text/plain": "txt",
+    "text/csv": "csv",
+  };
+  return map[normalized] ? `.${map[normalized]}` : "";
+}
+
+function buildAttachmentName(rawName: string, mime: string): string {
+  const trimmed = rawName.trim();
+  const ext = guessExtensionFromMime(mime);
+  if (!trimmed) {
+    return ext ? `attachment${ext}` : "attachment";
+  }
+  if (!ext) return trimmed;
+  return /\.[A-Za-z0-9]{1,6}$/.test(trimmed) ? trimmed : `${trimmed}${ext}`;
+}
+
+async function downloadFile(url: string, filename: string): Promise<void> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Download failed (${res.status} ${res.statusText}).`);
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename || "attachment";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 function parseAccessList(value: string | undefined): string[] {
   if (!value) return [];
   const decoded = safeDecode(value);
@@ -35,6 +83,7 @@ export default function Verify() {
   const account = useCurrentAccount();
   const [registryId, setRegistryId] = useState(() => getRegistryId());
   const [showRevocationAdvanced, setShowRevocationAdvanced] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
 
   const ownedQuery = useSuiClientQuery(
     "getOwnedObjects",
@@ -74,6 +123,11 @@ export default function Verify() {
     <div className="card">
       <h2 style={{ marginTop: 0 }}>My Certificates</h2>
       <p className="small">Certificates appear automatically when your wallet is connected.</p>
+      {downloadError && (
+        <p className="small" style={{ marginTop: 8 }}>
+          {downloadError}
+        </p>
+      )}
 
       {!account && <p className="small">Connect your wallet to view your certificates.</p>}
 
@@ -126,7 +180,11 @@ export default function Verify() {
             const recipient = normalizeAddress(String(fields?.recipient ?? ""));
             const canAccess = viewerAddress && (viewerAddress === recipient || allowList.includes(viewerAddress));
             const isRevoked = registryId ? revokedSet.has(normalizeAddress(id)) : false;
-            const attachmentName = walrusRef?.meta?.name ? safeDecode(walrusRef.meta.name) : "attachment";
+            const attachmentMime = walrusRef?.meta?.mime ? safeDecode(walrusRef.meta.mime) : "";
+            const attachmentName = safeFilename(buildAttachmentName(walrusRef?.meta?.name ? safeDecode(walrusRef.meta.name) : "", attachmentMime));
+            const proxyUrl = walrusUrl
+              ? `/api/walrus-download?url=${encodeURIComponent(walrusUrl)}&name=${encodeURIComponent(attachmentName)}`
+              : "";
 
             return (
               <div key={id} className="card">
@@ -161,7 +219,28 @@ export default function Verify() {
                   {walrusUrl && canAccess && (
                     <p className="small" style={{ marginTop: 8 }}>
                       Attachment:{" "}
-                      <a href={walrusUrl} target="_blank" rel="noreferrer" download={attachmentName}>
+                      <a
+                        href={walrusUrl}
+                        download={attachmentName}
+                        onClick={async (event) => {
+                          event.preventDefault();
+                          setDownloadError("");
+                          try {
+                            if (proxyUrl) {
+                              await downloadFile(proxyUrl, attachmentName);
+                              return;
+                            }
+                            await downloadFile(walrusUrl, attachmentName);
+                          } catch (err) {
+                            try {
+                              await downloadFile(walrusUrl, attachmentName);
+                            } catch (fallbackErr) {
+                              setDownloadError(`Download failed in-browser. Opening the file instead. ${String(fallbackErr)}`);
+                              window.open(walrusUrl, "_blank", "noopener,noreferrer");
+                            }
+                          }
+                        }}
+                      >
                         Download file
                       </a>
                     </p>

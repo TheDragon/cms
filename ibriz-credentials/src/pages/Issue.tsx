@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChangeEvent } from "react";
+import { createPortal } from "react-dom";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient, useSuiClientQuery } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
 import { MODULE, PACKAGE_ID, TYPES, WALRUS_UPLOAD_URL, getRegistryId, setRegistryId } from "../config";
@@ -81,8 +82,17 @@ type ProgramHistoryItem = {
   issuedCount: number;
 };
 
+type IssuedCredentialItem = {
+  id: string;
+  recipient: string;
+  context: string;
+};
+
 const HISTORY_EVENT_LIMIT = 200;
 const HISTORY_FETCH_CHUNK = 50;
+const ISSUED_PREVIEW_LIMIT = 8;
+const DEFAULT_CHUNK_SIZE = 10;
+const DEFAULT_CRED_TITLE = "Certificate of Participation";
 
 function buildDocRefForRecipient(baseRef: string, extraAccess: string[]): string {
   const trimmed = baseRef.trim();
@@ -94,10 +104,31 @@ function buildDocRefForRecipient(baseRef: string, extraAccess: string[]): string
   return applyWalrusMeta(trimmed, { acl: aclValue });
 }
 
+const ORG_CREATED_AT_PREFIX = "IBRIZ_ORG_CREATED_AT:";
+
+function getOrgCreatedAt(registryId: string): number {
+  if (!registryId || typeof window === "undefined") return 0;
+  const raw = localStorage.getItem(`${ORG_CREATED_AT_PREFIX}${registryId}`) || "";
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function setOrgCreatedAt(registryId: string, value: number) {
+  if (!registryId || typeof window === "undefined") return;
+  localStorage.setItem(`${ORG_CREATED_AT_PREFIX}${registryId}`, String(value));
+}
+
+function getEventTimestamp(event: any): number {
+  const raw = event?.timestampMs ?? event?.timestamp ?? event?.time ?? "";
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 0;
+}
+
 export default function Issue() {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const [localRegistry, setLocalRegistry] = useState(() => getRegistryId());
+  const [orgCreatedAtMs, setOrgCreatedAtMs] = useState(() => getOrgCreatedAt(localRegistry));
   const [activeStep, setActiveStep] = useState<1 | 2 | 3>(1);
   const [showOrgAdvanced, setShowOrgAdvanced] = useState(false);
   const [showProgramAdvanced, setShowProgramAdvanced] = useState(false);
@@ -106,11 +137,12 @@ export default function Issue() {
   const [ctxTitle, setCtxTitle] = useState("");
   const [ctxDesc, setCtxDesc] = useState("");
   const [contextId, setContextId] = useState("");
+  const [orgName, setOrgName] = useState("");
 
   const [recipientsInput, setRecipientsInput] = useState("");
   const [extraAccessInput, setExtraAccessInput] = useState("");
-  const [chunkSize, setChunkSize] = useState(10);
-  const [credTitle, setCredTitle] = useState("Certificate of Participation");
+  const [chunkSize, setChunkSize] = useState(DEFAULT_CHUNK_SIZE);
+  const [credTitle, setCredTitle] = useState(DEFAULT_CRED_TITLE);
   const [docRef, setDocRef] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadMsg, setUploadMsg] = useState("");
@@ -124,6 +156,14 @@ export default function Issue() {
   const [showProgramHistory, setShowProgramHistory] = useState(false);
   const [prefillEnabled, setPrefillEnabled] = useState(true);
   const [isProgramLocked, setIsProgramLocked] = useState(false);
+  const [showOrgCreate, setShowOrgCreate] = useState(false);
+  const [issuedList, setIssuedList] = useState<IssuedCredentialItem[]>([]);
+  const [issuedMsg, setIssuedMsg] = useState("");
+  const [isIssuedLoading, setIsIssuedLoading] = useState(false);
+  const [issuedLoaded, setIssuedLoaded] = useState(false);
+  const [showIssuedList, setShowIssuedList] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successCount, setSuccessCount] = useState(0);
   const [bulkProgress, setBulkProgress] = useState<{ total: number; completed: number; chunk: number; chunks: number } | null>(null);
   const [bulkErrors, setBulkErrors] = useState<string[]>([]);
   const [isBulkIssuing, setIsBulkIssuing] = useState(false);
@@ -143,11 +183,24 @@ export default function Issue() {
     { enabled: !!account }
   );
 
+  const registryQuery = useSuiClientQuery(
+    "getObject",
+    {
+      id: localRegistry || "0x0",
+      options: { showContent: true, showType: true },
+    },
+    { enabled: !!localRegistry }
+  );
+
   const issuerCapId = useMemo(() => {
     const d = capQuery.data;
     const first = d?.data?.[0];
     return first?.data?.objectId || "";
   }, [capQuery.data]);
+
+  const registryFields = useMemo(() => asMoveFields(registryQuery.data), [registryQuery.data]);
+  const registryName = useMemo(() => decodeMoveString(registryFields?.name), [registryFields]);
+  const registryIssuer = useMemo(() => (registryFields?.issuer ? normalizeAddress(String(registryFields.issuer)) : ""), [registryFields]);
 
   const isIssuer = !!issuerCapId;
   const recipientsParsed = useMemo(() => parseAddressList(recipientsInput), [recipientsInput]);
@@ -162,6 +215,11 @@ export default function Issue() {
   const step2Enabled = adminReady;
   const step3Enabled = adminReady && batchReady;
   const showCreateProgram = !isProgramLocked && historyLoaded;
+  const currentOrgName = registryName || "";
+  const hasNamedOrg = !!currentOrgName.trim();
+  const hasLegacyOrg = !!localRegistry && !hasNamedOrg;
+  const walletAddress = account?.address ? normalizeAddress(account.address) : "";
+  const showProgramHistoryPanel = activeStep === 2;
   const issueCount = validRecipients.length;
   const issueTargetLabel = issueCount === 1 ? "recipient" : "recipients";
   const issueLabel = selectedFile ? `Upload and issue to ${issueCount} ${issueTargetLabel}` : `Issue to ${issueCount} ${issueTargetLabel}`;
@@ -183,7 +241,84 @@ export default function Issue() {
     setShowProgramHistory(false);
     setPrefillEnabled(true);
     setIsProgramLocked(false);
+    setShowOrgCreate(false);
+    setIssuedList([]);
+    setIssuedMsg("");
+    setIssuedLoaded(false);
+    setShowIssuedList(false);
+    setOrgName("");
+    setOrgCreatedAtMs(0);
   }, [account?.address]);
+
+  useEffect(() => {
+    setIssuedList([]);
+    setIssuedMsg("");
+    setIssuedLoaded(false);
+    setShowIssuedList(false);
+  }, [contextId]);
+
+  useEffect(() => {
+    setOrgCreatedAtMs(getOrgCreatedAt(localRegistry));
+  }, [localRegistry]);
+
+  useEffect(() => {
+    setContextId("");
+    setCtxTitle("");
+    setCtxDesc("");
+    setIsProgramLocked(false);
+    setPrefillEnabled(true);
+    setProgramHistory([]);
+    setHistoryMsg("");
+    setHistoryLoaded(false);
+    setShowProgramHistory(false);
+    setShowProgramAdvanced(false);
+    setIssuedList([]);
+    setIssuedMsg("");
+    setIssuedLoaded(false);
+    setShowIssuedList(false);
+  }, [localRegistry]);
+
+  const resetWorkflow = useCallback(() => {
+    setActiveStep(1);
+    setContextId("");
+    setCtxTitle("");
+    setCtxDesc("");
+    setIsProgramLocked(false);
+    setPrefillEnabled(true);
+    setProgramHistory([]);
+    setHistoryMsg("");
+    setHistoryLoaded(false);
+    setShowProgramHistory(false);
+    setShowProgramAdvanced(false);
+    setRecipientsInput("");
+    setExtraAccessInput("");
+    setChunkSize(DEFAULT_CHUNK_SIZE);
+    setCredTitle(DEFAULT_CRED_TITLE);
+    setDocRef("");
+    setSelectedFile(null);
+    setUploadError("");
+    setUploadMsg("");
+    setBulkProgress(null);
+    setBulkErrors([]);
+    setIsBulkIssuing(false);
+    setShowIssueAdvanced(false);
+    setIssuedList([]);
+    setIssuedMsg("");
+    setIssuedLoaded(false);
+    setShowIssuedList(false);
+    setLastTx(null);
+    setMsg("");
+  }, []);
+
+  useEffect(() => {
+    if (!showSuccessModal) return;
+    const timer = setTimeout(() => {
+      setShowSuccessModal(false);
+      resetWorkflow();
+    }, 1600);
+    return () => clearTimeout(timer);
+  }, [showSuccessModal, resetWorkflow]);
+
 
   async function copyToClipboard(label: string, value: string) {
     if (!value) return;
@@ -220,9 +355,14 @@ export default function Issue() {
 
   async function createIssuer() {
     if (!account) return;
+    const trimmedName = orgName.trim();
+    if (!trimmedName) {
+      setMsg("Add an organization name before creating the profile.");
+      return;
+    }
     setMsg("");
     const tx = new Transaction();
-    tx.moveCall({ target: target("create_issuer"), arguments: [] });
+    tx.moveCall({ target: target("create_issuer"), arguments: [tx.pure.string(trimmedName)] });
 
     const res = await signAndExecute({ transaction: tx });
 
@@ -246,6 +386,11 @@ export default function Issue() {
     if (resolvedRegistryId) {
       setRegistryId(resolvedRegistryId);
       setLocalRegistry(resolvedRegistryId);
+      const createdAt = Date.now();
+      setOrgCreatedAtMs(createdAt);
+      setOrgCreatedAt(resolvedRegistryId, createdAt);
+      setShowOrgCreate(false);
+      setOrgName(trimmedName);
       setMsg("Setup complete. Organization linked to this browser.");
     } else if (fetchError) {
       setMsg(`Setup complete, but we could not find the organization ID. ${fetchError}`);
@@ -315,6 +460,26 @@ export default function Issue() {
   const loadProgramHistory = useCallback(async () => {
     if (!account) {
       setHistoryMsg("Connect your wallet to load program history.");
+      setProgramHistory([]);
+      setHistoryLoaded(true);
+      return;
+    }
+    if (!isIssuer) {
+      setHistoryMsg("Admin wallet required to view program history.");
+      setProgramHistory([]);
+      setHistoryLoaded(true);
+      return;
+    }
+    if (!localRegistry || !hasNamedOrg) {
+      setHistoryMsg("Select a named organization to view program history.");
+      setProgramHistory([]);
+      setHistoryLoaded(true);
+      return;
+    }
+    if (registryIssuer && walletAddress && registryIssuer !== walletAddress) {
+      setHistoryMsg("This organization belongs to another wallet.");
+      setProgramHistory([]);
+      setHistoryLoaded(true);
       return;
     }
 
@@ -324,13 +489,44 @@ export default function Issue() {
 
     try {
       const issuerAddress = normalizeAddress(account.address);
+      let orgCreatedAt = orgCreatedAtMs;
+      if (!orgCreatedAt) {
+        const issuerEventType = `${PACKAGE_ID}::${MODULE}::IssuerCreated`;
+        const issuerRes = await client.queryEvents({ query: { MoveEventType: issuerEventType }, limit: HISTORY_EVENT_LIMIT });
+        const issuerEvents = (issuerRes as any)?.data ?? [];
+        const registryIdValue = normalizeAddress(localRegistry);
+        const issuerMatch = issuerEvents.find((event: any) => {
+          const eventRegistry = normalizeAddress(getParsedEventField(event, ["registry_id", "registryId"]));
+          return eventRegistry && eventRegistry === registryIdValue;
+        });
+        const issuerTimestamp = issuerMatch ? getEventTimestamp(issuerMatch) : 0;
+        if (issuerTimestamp) {
+          orgCreatedAt = issuerTimestamp;
+          setOrgCreatedAtMs(issuerTimestamp);
+          setOrgCreatedAt(localRegistry, issuerTimestamp);
+        }
+      }
+
       const contextEventType = `${PACKAGE_ID}::${MODULE}::ContextCreated`;
       const credentialEventType = `${PACKAGE_ID}::${MODULE}::CredentialIssued`;
 
       const [contextRes, credentialRes] = await Promise.all([client.queryEvents({ query: { MoveEventType: contextEventType }, limit: HISTORY_EVENT_LIMIT }), client.queryEvents({ query: { MoveEventType: credentialEventType }, limit: HISTORY_EVENT_LIMIT })]);
 
-      const contextEvents = (contextRes as any)?.data ?? [];
-      const credentialEvents = (credentialRes as any)?.data ?? [];
+      const rawContextEvents = (contextRes as any)?.data ?? [];
+      const rawCredentialEvents = (credentialRes as any)?.data ?? [];
+      const shouldFilterByTime = orgCreatedAt > 0;
+      const contextEvents = shouldFilterByTime
+        ? rawContextEvents.filter((event: any) => {
+            const ts = getEventTimestamp(event);
+            return ts > 0 && ts >= orgCreatedAt;
+          })
+        : rawContextEvents;
+      const credentialEvents = shouldFilterByTime
+        ? rawCredentialEvents.filter((event: any) => {
+            const ts = getEventTimestamp(event);
+            return ts > 0 && ts >= orgCreatedAt;
+          })
+        : rawCredentialEvents;
 
       const contextIds: string[] = [];
       const contextSeen = new Set<string>();
@@ -380,7 +576,7 @@ export default function Issue() {
 
       setProgramHistory(items);
 
-      if (prefillEnabled && !contextId && items.length > 0) {
+      if (prefillEnabled && !contextId && items.length > 0 && orgCreatedAt > 0) {
         const latest = items[0];
         setContextId(latest.id);
         setCtxTitle(latest.title);
@@ -390,7 +586,9 @@ export default function Issue() {
         setPrefillEnabled(false);
       }
 
-      let summary = items.length ? `Loaded ${items.length} program${items.length === 1 ? "" : "s"} from the latest on-chain events.` : "No programs found for this wallet yet.";
+      let summary = items.length
+        ? `Loaded ${items.length} program${items.length === 1 ? "" : "s"} from the latest on-chain events.`
+        : "No history available for this organization yet.";
       if ((contextRes as any)?.hasNextPage || (credentialRes as any)?.hasNextPage) {
         summary += " Showing the latest results only.";
       }
@@ -401,13 +599,105 @@ export default function Issue() {
       setIsHistoryLoading(false);
       setHistoryLoaded(true);
     }
-  }, [account, client, contextId, prefillEnabled]);
+  }, [account, client, contextId, hasNamedOrg, isIssuer, localRegistry, orgCreatedAtMs, prefillEnabled, registryIssuer, walletAddress]);
 
   useEffect(() => {
     if (activeStep !== 2) return;
     if (!account || !isIssuer || historyLoaded) return;
     loadProgramHistory();
   }, [activeStep, account, isIssuer, historyLoaded, loadProgramHistory]);
+
+  const loadIssuedCertificates = useCallback(async () => {
+    if (!account) {
+      setIssuedMsg("Connect your wallet to load certificates.");
+      setIssuedList([]);
+      setIssuedLoaded(true);
+      return;
+    }
+    if (!isIssuer) {
+      setIssuedMsg("Admin wallet required to view issued certificates.");
+      setIssuedList([]);
+      setIssuedLoaded(true);
+      return;
+    }
+    if (!localRegistry || !hasNamedOrg) {
+      setIssuedMsg("Select a named organization to view issued certificates.");
+      setIssuedList([]);
+      setIssuedLoaded(true);
+      return;
+    }
+    if (registryIssuer && walletAddress && registryIssuer !== walletAddress) {
+      setIssuedMsg("This organization belongs to another wallet.");
+      setIssuedList([]);
+      setIssuedLoaded(true);
+      return;
+    }
+
+    setIsIssuedLoading(true);
+    setIssuedMsg("");
+    setIssuedList([]);
+
+    try {
+      const issuerAddress = normalizeAddress(account.address);
+      const contextFilter = contextId ? normalizeAddress(contextId) : "";
+      let orgCreatedAt = orgCreatedAtMs;
+      if (!orgCreatedAt) {
+        const issuerEventType = `${PACKAGE_ID}::${MODULE}::IssuerCreated`;
+        const issuerRes = await client.queryEvents({ query: { MoveEventType: issuerEventType }, limit: HISTORY_EVENT_LIMIT });
+        const issuerEvents = (issuerRes as any)?.data ?? [];
+        const registryIdValue = normalizeAddress(localRegistry);
+        const issuerMatch = issuerEvents.find((event: any) => {
+          const eventRegistry = normalizeAddress(getParsedEventField(event, ["registry_id", "registryId"]));
+          return eventRegistry && eventRegistry === registryIdValue;
+        });
+        const issuerTimestamp = issuerMatch ? getEventTimestamp(issuerMatch) : 0;
+        if (issuerTimestamp) {
+          orgCreatedAt = issuerTimestamp;
+          setOrgCreatedAtMs(issuerTimestamp);
+          setOrgCreatedAt(localRegistry, issuerTimestamp);
+        }
+      }
+
+      const credentialEventType = `${PACKAGE_ID}::${MODULE}::CredentialIssued`;
+      const res = await client.queryEvents({ query: { MoveEventType: credentialEventType }, limit: HISTORY_EVENT_LIMIT });
+      const rawEvents = (res as any)?.data ?? [];
+      const events = orgCreatedAt > 0
+        ? rawEvents.filter((event: any) => {
+            const ts = getEventTimestamp(event);
+            return ts > 0 && ts >= orgCreatedAt;
+          })
+        : rawEvents;
+
+      const items: IssuedCredentialItem[] = [];
+      for (const event of events) {
+        const issuer = normalizeAddress(getParsedEventField(event, ["issuer"]));
+        if (!issuer || issuer !== issuerAddress) continue;
+        const context = getParsedEventField(event, ["context", "context_id", "contextId"]);
+        if (contextFilter && normalizeAddress(context) !== contextFilter) continue;
+        const recipient = getParsedEventField(event, ["recipient"]);
+        const credentialId = getParsedEventField(event, ["credential_id", "credentialId"]);
+        if (!credentialId) continue;
+        items.push({ id: credentialId, recipient, context: context || "" });
+        if (items.length >= ISSUED_PREVIEW_LIMIT) break;
+      }
+
+      setIssuedList(items);
+
+      const scopeLabel = contextFilter ? "this program" : "this organization";
+      let summary = items.length
+        ? `Loaded ${items.length} recent certificates for ${scopeLabel}.`
+        : `No issued certificates for ${scopeLabel} yet.`;
+      if ((res as any)?.hasNextPage) {
+        summary += " Showing the latest results only.";
+      }
+      setIssuedMsg(summary);
+    } catch (err) {
+      setIssuedMsg(`Unable to load certificates. ${String(err)}`);
+    } finally {
+      setIsIssuedLoading(false);
+      setIssuedLoaded(true);
+    }
+  }, [account, client, contextId, hasNamedOrg, isIssuer, localRegistry, orgCreatedAtMs, registryIssuer, walletAddress]);
 
   async function issueCredentialsBulk() {
     if (!account || !issuerCapId) return;
@@ -417,6 +707,7 @@ export default function Issue() {
     if (invalidRecipients.length) return setMsg("Remove invalid entries before issuing.");
     if (invalidAccess.length) return setMsg("Remove invalid entries from the access list.");
 
+    const totalRecipients = validRecipients.length;
     setMsg("");
     setBulkErrors([]);
     setBulkProgress(null);
@@ -438,7 +729,7 @@ export default function Issue() {
       stage = "issue";
       const safeChunkSize = Math.max(1, Math.min(chunkSize || 1, 50));
       const chunks = chunkArray(validRecipients, safeChunkSize);
-      setBulkProgress({ total: validRecipients.length, completed: 0, chunk: 0, chunks: chunks.length });
+      setBulkProgress({ total: totalRecipients, completed: 0, chunk: 0, chunks: chunks.length });
       for (let index = 0; index < chunks.length; index += 1) {
         const chunk = chunks[index];
         const tx = new Transaction();
@@ -457,10 +748,12 @@ export default function Issue() {
         const res = await signAndExecute({ transaction: tx });
         setLastTx(res.digest);
         completed += chunk.length;
-        setBulkProgress({ total: validRecipients.length, completed, chunk: index + 1, chunks: chunks.length });
-        setMsg(`Issued ${completed}/${validRecipients.length} certificates.`);
+        setBulkProgress({ total: totalRecipients, completed, chunk: index + 1, chunks: chunks.length });
+        setMsg(`Issued ${completed}/${totalRecipients} certificates.`);
       }
-      setMsg(`Success. Issued ${validRecipients.length} certificates.`);
+      setSuccessCount(totalRecipients);
+      setShowSuccessModal(true);
+      setMsg(`Success. Issued ${totalRecipients} certificates.`);
     } catch (err) {
       const message = String(err);
       const label = stage === "upload" ? "Upload failed" : "Issuing stopped";
@@ -548,8 +841,123 @@ export default function Issue() {
     }
   }
 
+  const issueSidebarTarget = typeof document !== "undefined" ? document.getElementById("issue-sidebar") : null;
+  const issueSidebar = (
+    <>
+      {showProgramHistoryPanel && (
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>Program history</h3>
+          <p className="small">Use past programs as templates when you want to reissue a familiar setup.</p>
+          <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowProgramHistory((prev) => !prev)}>
+            {showProgramHistory ? "Hide history" : "Show history"}
+          </button>
+          {showProgramHistory && (
+            <div style={{ marginTop: 12 }}>
+              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={!account || !isIssuer || isHistoryLoading} onClick={loadProgramHistory}>
+                {isHistoryLoading ? "Loading history..." : historyLoaded ? "Refresh history" : "Load history"}
+              </button>
+              {!isIssuer && <p className="small" style={{ marginTop: 8 }}>Connect an admin wallet to load history.</p>}
+              {historyMsg && (
+                <p className="small" style={{ marginTop: 8 }}>
+                  {historyMsg}
+                </p>
+              )}
+              {historyLoaded && !isHistoryLoading && programHistory.length === 0 && !historyMsg && (
+                <p className="small" style={{ marginTop: 8 }}>
+                  No history available for this organization yet.
+                </p>
+              )}
+              {programHistory.length > 0 && (
+                <div className="cards-grid" style={{ marginTop: 12 }}>
+                  {programHistory.map((item) => (
+                    <div key={item.id} className="card">
+                      <h4 style={{ margin: 0 }}>{item.title}</h4>
+                      {item.description && (
+                        <p className="small" style={{ marginTop: 6 }}>
+                          {item.description}
+                        </p>
+                      )}
+                      <p className="small" style={{ marginTop: 8 }}>
+                        Issued so far: <span className="badge">{item.issuedCount}</span>
+                      </p>
+                      <p className="small">Program ID</p>
+                      <pre>{item.id}</pre>
+                      <button
+                        className="btn secondary"
+                        style={{ padding: "6px 10px", fontSize: 12 }}
+                        onClick={() => {
+                          setContextId(item.id);
+                          setCtxTitle(item.title);
+                          setCtxDesc(item.description || "");
+                          setPrefillEnabled(false);
+                          setIsProgramLocked(true);
+                          setShowProgramHistory(false);
+                          setMsg("Program selected. You can issue certificates now.");
+                        }}
+                      >
+                        Use this program
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="card" style={{ marginTop: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0 }}>Recent issued certificates</h3>
+          <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowIssuedList((prev) => !prev)}>
+            {showIssuedList ? "Hide list" : "Show list"}
+          </button>
+        </div>
+        {showIssuedList && (
+          <div style={{ marginTop: 12 }}>
+            <p className="small">
+              Best-effort list from recent events for {contextId ? "this program" : "this organization"}.
+            </p>
+            <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={!account || !isIssuer || isIssuedLoading} onClick={loadIssuedCertificates}>
+              {isIssuedLoading ? "Loading list..." : issuedLoaded ? "Refresh list" : "Load list"}
+            </button>
+            {!isIssuer && <p className="small" style={{ marginTop: 8 }}>Connect an admin wallet to load issued certificates.</p>}
+            {issuedMsg && (
+              <p className="small" style={{ marginTop: 8 }}>
+                {issuedMsg}
+              </p>
+            )}
+            {issuedLoaded && !isIssuedLoading && issuedList.length === 0 && !issuedMsg && (
+              <p className="small" style={{ marginTop: 8 }}>
+                No issued certificates for this organization yet.
+              </p>
+            )}
+            {issuedList.length > 0 && (
+              <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+                {issuedList.map((item) => (
+                  <div key={item.id} style={{ border: "1px solid var(--stroke)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.6)" }}>
+                    <p className="small" style={{ margin: 0 }}>Recipient</p>
+                    <pre style={{ marginTop: 6 }}>{item.recipient || "(unknown)"}</pre>
+                    <p className="small" style={{ marginTop: 6 }}>Certificate ID</p>
+                    <pre style={{ marginTop: 6 }}>{item.id}</pre>
+                    {item.context && (
+                      <>
+                        <p className="small" style={{ marginTop: 6 }}>Program</p>
+                        <pre style={{ marginTop: 6 }}>{item.context}</pre>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
   return (
-    <div className="card">
+    <>
+      <div className="card">
       <h2 style={{ marginTop: 0 }}>Issue Certificates (Admin)</h2>
       <p className="small">Start by creating an organization. Once approved, you can issue certificates.</p>
 
@@ -561,15 +969,20 @@ export default function Issue() {
         </p>
       )}
 
-      <div className="step-tabs" style={{ marginTop: 12 }}>
-        <button type="button" className={`step-tab ${activeStep === 1 ? "active" : ""}`} onClick={() => setActiveStep(1)}>
-          Step 1: Organization
-        </button>
-        <button type="button" className={`step-tab ${activeStep === 2 ? "active" : ""}`} disabled={!step2Enabled} onClick={() => setActiveStep(2)}>
-          Step 2: Program
-        </button>
-        <button type="button" className={`step-tab ${activeStep === 3 ? "active" : ""}`} disabled={!step3Enabled} onClick={() => setActiveStep(3)}>
-          Step 3: Issue
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
+        <div className="step-tabs" style={{ marginTop: 0 }}>
+          <button type="button" className={`step-tab ${activeStep === 1 ? "active" : ""}`} onClick={() => setActiveStep(1)}>
+            Step 1: Organization
+          </button>
+          <button type="button" className={`step-tab ${activeStep === 2 ? "active" : ""}`} disabled={!step2Enabled} onClick={() => setActiveStep(2)}>
+            Step 2: Program
+          </button>
+          <button type="button" className={`step-tab ${activeStep === 3 ? "active" : ""}`} disabled={!step3Enabled} onClick={() => setActiveStep(3)}>
+            Step 3: Issue
+          </button>
+        </div>
+        <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={resetWorkflow}>
+          Reset workflow
         </button>
       </div>
       <p className="small" style={{ marginTop: 6 }}>
@@ -589,27 +1002,81 @@ export default function Issue() {
             </div>
 
             <div style={{ marginTop: 12 }}>
-              {!isIssuer && (
-                <button className="btn" disabled={!account || isPending} onClick={createIssuer}>
-                  Create organization profile
-                </button>
-              )}
-              {isIssuer && (
-                <div>
-                  <button className="btn" disabled={!account || isPending} onClick={createIssuer}>
-                    Create another organization profile
+              {hasNamedOrg && (
+                <div className="card" style={{ padding: 12 }}>
+                  <p className="small" style={{ margin: 0 }}>Current organization</p>
+                  <p style={{ marginTop: 6, fontWeight: 600 }}>{currentOrgName}</p>
+                  <pre style={{ marginTop: 8 }}>{localRegistry}</pre>
+                  <button className="btn secondary" style={{ marginTop: 8, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Organization ID", localRegistry)}>
+                    Copy organization ID
                   </button>
-                  <p className="small">Use this if you want a separate profile for another organization.</p>
                 </div>
               )}
-              {capQuery.isPending && <p className="small">Checking admin access...</p>}
-            </div>
+              {!hasNamedOrg && (
+                <div className="card" style={{ padding: 12 }}>
+                  <p className="small" style={{ margin: 0 }}>Current organization</p>
+                  <p className="small" style={{ marginTop: 8 }}>
+                    {hasLegacyOrg
+                      ? "A previous organization was found, but it has no name. Create a new organization to continue."
+                      : "No organization linked yet."}
+                  </p>
+                </div>
+              )}
 
-            <div style={{ marginTop: 12 }}>
-              <p className="small">Organization saved in this browser: {localRegistry ? <span className="badge ok">Yes</span> : <span className="badge">Not yet</span>}</p>
-              <button className="btn secondary" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => setShowOrgAdvanced((prev) => !prev)}>
-                {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
-              </button>
+              <div style={{ marginTop: 12 }}>
+                {!showOrgCreate && (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowOrgCreate(true)}>
+                      Create a new organization
+                    </button>
+                    <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowOrgAdvanced((prev) => !prev)}>
+                      {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
+                    </button>
+                  </div>
+                )}
+                {showOrgCreate && (
+                  <div style={{ marginTop: 8 }}>
+                    <label className="small">Organization name</label>
+                    <input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="e.g., Acme Academy" />
+                    <p className="small">Used when creating a new organization profile. It does not rename an existing one.</p>
+
+                    {!isIssuer && (
+                      <button className="btn" disabled={!account || isPending || !orgName.trim()} onClick={createIssuer}>
+                        Create organization profile
+                      </button>
+                    )}
+                    {isIssuer && (
+                      <div>
+                        <button className="btn" disabled={!account || isPending || !orgName.trim()} onClick={createIssuer}>
+                          Create another organization profile
+                        </button>
+                        <p className="small">Use this if you want a separate profile for another organization.</p>
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                      <button
+                        className="btn secondary"
+                        style={{ padding: "6px 10px", fontSize: 12 }}
+                        onClick={() => {
+                          setShowOrgCreate(false);
+                          setOrgName("");
+                        }}
+                      >
+                        Hide
+                      </button>
+                      <button
+                        className="btn secondary"
+                        style={{ padding: "6px 10px", fontSize: 12 }}
+                        onClick={() => setShowOrgAdvanced((prev) => !prev)}
+                      >
+                        {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {capQuery.isPending && <p className="small">Checking admin access...</p>}
             </div>
 
             {showOrgAdvanced && (
@@ -648,8 +1115,10 @@ export default function Issue() {
               <div className="step-meta">
                 <h3 className="step-title">Create a program</h3>
                 <p className="step-desc">Programs group certificates for an event or course.</p>
+                <p className="small" style={{ marginTop: 6 }}>
+                  Status: {batchReady ? "Ready" : "Not set"}
+                </p>
               </div>
-              <span className={`badge ${batchReady ? "ok" : ""}`}>{batchReady ? "Ready" : "Not set"}</span>
             </div>
 
             <div style={{ marginTop: 12 }}>
@@ -729,66 +1198,6 @@ export default function Issue() {
                     </button>
                   )}
                   <p className="small">Use this only if you are switching browsers or accounts.</p>
-                </div>
-              )}
-            </div>
-
-            <div style={{ marginTop: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div>
-                  <h4 style={{ margin: 0 }}>Program history</h4>
-                  <p className="small" style={{ marginTop: 6 }}>
-                    Use past programs as templates when you want to reissue a familiar setup.
-                  </p>
-                </div>
-                <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowProgramHistory((prev) => !prev)}>
-                  {showProgramHistory ? "Hide history" : "Show history"}
-                </button>
-              </div>
-
-              {showProgramHistory && (
-                <div style={{ marginTop: 12 }}>
-                  <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={!account || !isIssuer || isHistoryLoading} onClick={loadProgramHistory}>
-                    {isHistoryLoading ? "Loading history..." : historyLoaded ? "Refresh history" : "Load history"}
-                  </button>
-                  {historyMsg && (
-                    <p className="small" style={{ marginTop: 8 }}>
-                      {historyMsg}
-                    </p>
-                  )}
-                  {programHistory.length > 0 && (
-                    <div className="cards-grid" style={{ marginTop: 12 }}>
-                      {programHistory.map((item) => (
-                        <div key={item.id} className="card">
-                          <h4 style={{ margin: 0 }}>{item.title}</h4>
-                          {item.description && (
-                            <p className="small" style={{ marginTop: 6 }}>
-                              {item.description}
-                            </p>
-                          )}
-                          <p className="small" style={{ marginTop: 8 }}>
-                            Issued so far: <span className="badge">{item.issuedCount}</span>
-                          </p>
-                          <p className="small">Program ID</p>
-                          <pre>{item.id}</pre>
-                          <button
-                            className="btn secondary"
-                            style={{ padding: "6px 10px", fontSize: 12 }}
-                            onClick={() => {
-                              setContextId(item.id);
-                              setCtxTitle(item.title);
-                              setCtxDesc(item.description || "");
-                              setPrefillEnabled(false);
-                              setIsProgramLocked(true);
-                              setMsg("Program selected. You can issue certificates now.");
-                            }}
-                          >
-                            Use this program
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               )}
             </div>
@@ -973,6 +1382,30 @@ export default function Issue() {
           )}
         </div>
       )}
-    </div>
+      </div>
+      {showSuccessModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,25,27,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            zIndex: 50,
+          }}
+        >
+          <div className="card" style={{ maxWidth: 420, width: "100%", textAlign: "center" }}>
+            <h3 style={{ marginTop: 0 }}>Issuance complete</h3>
+            <p className="small" style={{ marginTop: 8 }}>
+              {successCount ? `${successCount} certificates issued successfully.` : "Certificates issued successfully."}
+            </p>
+            <p className="small">Returning you to organization setup.</p>
+          </div>
+        </div>
+      )}
+      {issueSidebarTarget && createPortal(issueSidebar, issueSidebarTarget)}
+    </>
   );
 }
