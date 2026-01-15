@@ -90,7 +90,7 @@ type IssuedCredentialItem = {
 
 const HISTORY_EVENT_LIMIT = 200;
 const HISTORY_FETCH_CHUNK = 50;
-const SIDEBAR_PAGE_SIZE = 5;
+const SIDEBAR_PAGE_SIZE = 2;
 const DEFAULT_CHUNK_SIZE = 10;
 const DEFAULT_CRED_TITLE = "Certificate of Participation";
 
@@ -174,6 +174,7 @@ export default function Issue({ onIssuedSuccess }: IssueProps) {
   const [issuedPage, setIssuedPage] = useState(1);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successCount, setSuccessCount] = useState(0);
+  const [selectedIssued, setSelectedIssued] = useState<IssuedCredentialItem | null>(null);
   const [bulkProgress, setBulkProgress] = useState<{ total: number; completed: number; chunk: number; chunks: number } | null>(null);
   const [bulkErrors, setBulkErrors] = useState<string[]>([]);
   const [isBulkIssuing, setIsBulkIssuing] = useState(false);
@@ -1015,18 +1016,16 @@ export default function Issue({ onIssuedSuccess }: IssueProps) {
           {issuedPageItems.length > 0 && (
             <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
               {issuedPageItems.map((item) => (
-                <div key={item.id} style={{ border: "1px solid var(--stroke)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.6)" }}>
+                <button
+                  type="button"
+                  key={item.id}
+                  className="card"
+                  onClick={() => setSelectedIssued(item)}
+                  style={{ textAlign: "left", cursor: "pointer", padding: 12, background: "rgba(255,255,255,0.6)" }}
+                >
                   <p className="small" style={{ margin: 0 }}>Recipient</p>
                   <pre style={{ marginTop: 6 }}>{item.recipient || "(unknown)"}</pre>
-                  <p className="small" style={{ marginTop: 6 }}>Certificate ID</p>
-                  <pre style={{ marginTop: 6 }}>{item.id}</pre>
-                  {item.context && (
-                    <>
-                      <p className="small" style={{ marginTop: 6 }}>Program</p>
-                      <pre style={{ marginTop: 6 }}>{item.context}</pre>
-                    </>
-                  )}
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -1503,6 +1502,41 @@ export default function Issue({ onIssuedSuccess }: IssueProps) {
               {successCount ? `${successCount} certificates issued successfully.` : "Certificates issued successfully."}
             </p>
             <p className="small">Returning you to organization setup.</p>
+          </div>
+        </div>
+      )}
+      {selectedIssued && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,25,27,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            zIndex: 50,
+          }}
+        >
+          <div className="card" style={{ maxWidth: 520, width: "100%" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <h3 style={{ margin: 0 }}>Certificate details</h3>
+              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setSelectedIssued(null)}>
+                Close
+              </button>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <p className="small" style={{ margin: 0 }}>Recipient</p>
+              <pre style={{ marginTop: 6 }}>{selectedIssued.recipient || "(unknown)"}</pre>
+              <p className="small" style={{ marginTop: 12 }}>Certificate ID</p>
+              <pre style={{ marginTop: 6 }}>{selectedIssued.id}</pre>
+              {selectedIssued.context && (
+                <>
+                  <p className="small" style={{ marginTop: 12 }}>Program</p>
+                  <pre style={{ marginTop: 6 }}>{selectedIssued.context}</pre>
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}

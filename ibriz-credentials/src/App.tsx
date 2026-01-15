@@ -9,6 +9,7 @@ type Tab = "issue" | "verify" | "revoke";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("verify");
+  const [showHelp, setShowHelp] = useState(false);
   const account = useCurrentAccount();
   const capQuery = useSuiClientQuery(
     "getOwnedObjects",
@@ -64,6 +65,7 @@ export default function App() {
   };
   const meta = tabMeta[tab];
   const tips = tabTips[tab];
+  const helpText = "If something is unclear, share the screen and we will walk through the steps together.";
 
   return (
     <div className="app-shell">
@@ -110,6 +112,9 @@ export default function App() {
             <div className="hero-tags">
               <span className="badge">Sui</span>
               <span className="badge">Walrus</span>
+              <button type="button" className="help-icon" onClick={() => setShowHelp(true)} aria-label="Need help">
+                ?
+              </button>
             </div>
             {tab === "issue" && <div id="issue-status" className="hero-status" />}
           </div>
@@ -125,12 +130,6 @@ export default function App() {
             {tab === "issue" ? (
               <>
                 <div id="issue-sidebar" />
-                <div className="card" style={{ marginTop: 12 }}>
-                  <h3 style={{ marginTop: 0 }}>Need help?</h3>
-                  <p className="small">
-                    If something is unclear, share the screen and we will walk through the steps together.
-                  </p>
-                </div>
               </>
             ) : (
               <>
@@ -143,17 +142,37 @@ export default function App() {
                   </ul>
                   <p className="small">{tips.note}</p>
                 </div>
-                <div className="card" style={{ marginTop: 12 }}>
-                  <h3 style={{ marginTop: 0 }}>Need help?</h3>
-                  <p className="small">
-                    If something is unclear, share the screen and we will walk through the steps together.
-                  </p>
-                </div>
               </>
             )}
           </aside>
         </div>
       </main>
+      {showHelp && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,25,27,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            zIndex: 60,
+          }}
+        >
+          <div className="card" style={{ maxWidth: 420, width: "100%" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <h3 style={{ margin: 0 }}>Need help?</h3>
+              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowHelp(false)}>
+                Close
+              </button>
+            </div>
+            <p className="small" style={{ marginTop: 12 }}>
+              {helpText}
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
