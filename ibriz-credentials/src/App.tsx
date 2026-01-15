@@ -107,14 +107,17 @@ export default function App() {
             <p className="page-subtitle">{meta.subtitle}</p>
           </div>
           <div className="hero-actions">
-            <span className="badge">Sui</span>
-            <span className="badge">Walrus</span>
+            <div className="hero-tags">
+              <span className="badge">Sui</span>
+              <span className="badge">Walrus</span>
+            </div>
+            {tab === "issue" && <div id="issue-status" className="hero-status" />}
           </div>
         </div>
 
         <div className="main-grid">
           <section className="main-pane">
-            {tab === "issue" && <Issue />}
+            {tab === "issue" && <Issue onIssuedSuccess={() => setTab("verify")} />}
             {tab === "verify" && <Verify />}
             {tab === "revoke" && <Revocations />}
           </section>

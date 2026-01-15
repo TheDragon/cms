@@ -3,7 +3,7 @@ import type { ChangeEvent } from "react";
 import { createPortal } from "react-dom";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient, useSuiClientQuery } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
-import { MODULE, PACKAGE_ID, TYPES, WALRUS_UPLOAD_URL, getRegistryId, setRegistryId } from "../config";
+import { MODULE, NETWORK, PACKAGE_ID, TYPES, WALRUS_UPLOAD_URL, getRegistryId, setRegistryId } from "../config";
 import { asMoveFields, decodeMoveString } from "../lib/move";
 import { applyWalrusMeta } from "../lib/walrus";
 
@@ -90,7 +90,7 @@ type IssuedCredentialItem = {
 
 const HISTORY_EVENT_LIMIT = 200;
 const HISTORY_FETCH_CHUNK = 50;
-const ISSUED_PREVIEW_LIMIT = 8;
+const SIDEBAR_PAGE_SIZE = 5;
 const DEFAULT_CHUNK_SIZE = 10;
 const DEFAULT_CRED_TITLE = "Certificate of Participation";
 
@@ -104,7 +104,7 @@ function buildDocRefForRecipient(baseRef: string, extraAccess: string[]): string
   return applyWalrusMeta(trimmed, { acl: aclValue });
 }
 
-const ORG_CREATED_AT_PREFIX = "IBRIZ_ORG_CREATED_AT:";
+const ORG_CREATED_AT_PREFIX = `IBRIZ_ORG_CREATED_AT:${NETWORK}:${PACKAGE_ID}:`;
 
 function getOrgCreatedAt(registryId: string): number {
   if (!registryId || typeof window === "undefined") return 0;
@@ -124,15 +124,23 @@ function getEventTimestamp(event: any): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-export default function Issue() {
+function formatShortId(value: string, head = 6, tail = 4): string {
+  if (!value) return "";
+  if (value.length <= head + tail + 3) return value;
+  return `${value.slice(0, head)}...${value.slice(-tail)}`;
+}
+
+type IssueProps = {
+  onIssuedSuccess?: () => void;
+};
+
+export default function Issue({ onIssuedSuccess }: IssueProps) {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const [localRegistry, setLocalRegistry] = useState(() => getRegistryId());
   const [orgCreatedAtMs, setOrgCreatedAtMs] = useState(() => getOrgCreatedAt(localRegistry));
   const [activeStep, setActiveStep] = useState<1 | 2 | 3>(1);
-  const [showOrgAdvanced, setShowOrgAdvanced] = useState(false);
-  const [showProgramAdvanced, setShowProgramAdvanced] = useState(false);
-  const [showIssueAdvanced, setShowIssueAdvanced] = useState(false);
+  const [showAdvancedModal, setShowAdvancedModal] = useState(false);
 
   const [ctxTitle, setCtxTitle] = useState("");
   const [ctxDesc, setCtxDesc] = useState("");
@@ -155,7 +163,6 @@ export default function Issue() {
   const [historyMsg, setHistoryMsg] = useState("");
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [showProgramHistory, setShowProgramHistory] = useState(false);
   const [prefillEnabled, setPrefillEnabled] = useState(true);
   const [isProgramLocked, setIsProgramLocked] = useState(false);
   const [showOrgCreate, setShowOrgCreate] = useState(false);
@@ -163,7 +170,8 @@ export default function Issue() {
   const [issuedMsg, setIssuedMsg] = useState("");
   const [isIssuedLoading, setIsIssuedLoading] = useState(false);
   const [issuedLoaded, setIssuedLoaded] = useState(false);
-  const [showIssuedList, setShowIssuedList] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [issuedPage, setIssuedPage] = useState(1);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successCount, setSuccessCount] = useState(0);
   const [bulkProgress, setBulkProgress] = useState<{ total: number; completed: number; chunk: number; chunks: number } | null>(null);
@@ -216,7 +224,7 @@ export default function Issue() {
   const issueReady = adminReady && batchReady && validRecipients.length > 0 && invalidRecipients.length === 0 && invalidAccess.length === 0;
   const step2Enabled = adminReady;
   const step3Enabled = adminReady && batchReady;
-  const showCreateProgram = !isProgramLocked && historyLoaded;
+  const showCreateProgram = !isProgramLocked;
   const currentOrgName = registryName || "";
   const hasNamedOrg = !!currentOrgName.trim();
   const hasLegacyOrg = !!localRegistry && !hasNamedOrg;
@@ -226,6 +234,12 @@ export default function Issue() {
   const issueCount = validRecipients.length;
   const issueTargetLabel = issueCount === 1 ? "recipient" : "recipients";
   const issueLabel = selectedFile ? `Upload and issue to ${issueCount} ${issueTargetLabel}` : `Issue to ${issueCount} ${issueTargetLabel}`;
+  const historyTotalPages = Math.max(1, Math.ceil(programHistory.length / SIDEBAR_PAGE_SIZE));
+  const historyPageSafe = Math.min(historyPage, historyTotalPages);
+  const historyPageItems = programHistory.slice((historyPageSafe - 1) * SIDEBAR_PAGE_SIZE, historyPageSafe * SIDEBAR_PAGE_SIZE);
+  const issuedTotalPages = Math.max(1, Math.ceil(issuedList.length / SIDEBAR_PAGE_SIZE));
+  const issuedPageSafe = Math.min(issuedPage, issuedTotalPages);
+  const issuedPageItems = issuedList.slice((issuedPageSafe - 1) * SIDEBAR_PAGE_SIZE, issuedPageSafe * SIDEBAR_PAGE_SIZE);
 
   useEffect(() => {
     if (!selectedFile) {
@@ -241,23 +255,23 @@ export default function Issue() {
     setHistoryLoaded(false);
     setProgramHistory([]);
     setHistoryMsg("");
-    setShowProgramHistory(false);
     setPrefillEnabled(true);
     setIsProgramLocked(false);
     setShowOrgCreate(false);
     setIssuedList([]);
     setIssuedMsg("");
     setIssuedLoaded(false);
-    setShowIssuedList(false);
     setOrgName("");
     setOrgCreatedAtMs(0);
+    setHistoryPage(1);
+    setIssuedPage(1);
   }, [account?.address]);
 
   useEffect(() => {
     setIssuedList([]);
     setIssuedMsg("");
     setIssuedLoaded(false);
-    setShowIssuedList(false);
+    setIssuedPage(1);
   }, [contextId]);
 
   useEffect(() => {
@@ -283,12 +297,11 @@ export default function Issue() {
     setProgramHistory([]);
     setHistoryMsg("");
     setHistoryLoaded(false);
-    setShowProgramHistory(false);
-    setShowProgramAdvanced(false);
     setIssuedList([]);
     setIssuedMsg("");
     setIssuedLoaded(false);
-    setShowIssuedList(false);
+    setHistoryPage(1);
+    setIssuedPage(1);
   }, [localRegistry]);
 
   const resetWorkflow = useCallback(() => {
@@ -301,8 +314,6 @@ export default function Issue() {
     setProgramHistory([]);
     setHistoryMsg("");
     setHistoryLoaded(false);
-    setShowProgramHistory(false);
-    setShowProgramAdvanced(false);
     setRecipientsInput("");
     setExtraAccessInput("");
     setChunkSize(DEFAULT_CHUNK_SIZE);
@@ -314,13 +325,14 @@ export default function Issue() {
     setBulkProgress(null);
     setBulkErrors([]);
     setIsBulkIssuing(false);
-    setShowIssueAdvanced(false);
     setIssuedList([]);
     setIssuedMsg("");
     setIssuedLoaded(false);
-    setShowIssuedList(false);
     setLastTx(null);
     setMsg("");
+    setHistoryPage(1);
+    setIssuedPage(1);
+    setShowAdvancedModal(false);
   }, []);
 
   useEffect(() => {
@@ -328,9 +340,10 @@ export default function Issue() {
     const timer = setTimeout(() => {
       setShowSuccessModal(false);
       resetWorkflow();
+      onIssuedSuccess?.();
     }, 1600);
     return () => clearTimeout(timer);
-  }, [showSuccessModal, resetWorkflow]);
+  }, [showSuccessModal, resetWorkflow, onIssuedSuccess]);
 
 
   async function copyToClipboard(label: string, value: string) {
@@ -375,6 +388,10 @@ export default function Issue() {
     const trimmedName = orgName.trim();
     if (!trimmedName) {
       setMsg("Add an organization name before creating the profile.");
+      return;
+    }
+    if (!window.confirm("Creating an organization costs a network fee. Continue?")) {
+      setMsg("Organization creation canceled.");
       return;
     }
     setMsg("");
@@ -425,12 +442,8 @@ export default function Issue() {
       setMsg("Missing organization ID. Paste the organization ID first.");
       return;
     }
-    if (currentOrgName.trim()) {
-      setMsg("Organization name is already set and cannot be edited.");
-      return;
-    }
     if (!canSetOrgName) {
-      setMsg("Only the issuing wallet can update the organization name.");
+      setMsg("Only the issuing wallet can edit the organization name.");
       return;
     }
     const trimmedName = orgNameDraft.trim();
@@ -438,8 +451,17 @@ export default function Issue() {
       setMsg("Organization name cannot be empty.");
       return;
     }
+    if (trimmedName === currentOrgName.trim()) {
+      setMsg("No changes to save yet.");
+      return;
+    }
+    if (!window.confirm("Saving the organization name costs a network fee. Continue?")) {
+      setMsg("Name update canceled.");
+      return;
+    }
     setIsOrgRenaming(true);
     setMsg("");
+    const wasBlank = !currentOrgName.trim();
     try {
       const tx = new Transaction();
       tx.moveCall({
@@ -449,7 +471,7 @@ export default function Issue() {
       const res = await signAndExecute({ transaction: tx });
       setLastTx(res.digest);
       setOrgNameDraft(trimmedName);
-      setMsg("Organization name set.");
+      setMsg(wasBlank ? "Organization name saved." : "Organization name updated.");
       registryQuery.refetch();
     } catch (err) {
       setMsg(`Unable to update the organization name. ${String(err)}`);
@@ -521,13 +543,13 @@ export default function Issue() {
       return;
     }
     if (!isIssuer) {
-      setHistoryMsg("Admin wallet required to view program history.");
+      setHistoryMsg("Only the organization wallet can view program history.");
       setProgramHistory([]);
       setHistoryLoaded(true);
       return;
     }
     if (!localRegistry || !hasNamedOrg) {
-      setHistoryMsg("Select a named organization to view program history.");
+      setHistoryMsg("Select an organization to view program history.");
       setProgramHistory([]);
       setHistoryLoaded(true);
       return;
@@ -631,6 +653,7 @@ export default function Issue() {
       });
 
       setProgramHistory(items);
+      setHistoryPage(1);
 
       if (prefillEnabled && !contextId && items.length > 0 && orgCreatedAt > 0) {
         const latest = items[0];
@@ -643,7 +666,7 @@ export default function Issue() {
       }
 
       let summary = items.length
-        ? `Loaded ${items.length} program${items.length === 1 ? "" : "s"} from the latest on-chain events.`
+        ? `Loaded ${items.length} program${items.length === 1 ? "" : "s"}.`
         : "No history available for this organization yet.";
       if ((contextRes as any)?.hasNextPage || (credentialRes as any)?.hasNextPage) {
         summary += " Showing the latest results only.";
@@ -671,13 +694,13 @@ export default function Issue() {
       return;
     }
     if (!isIssuer) {
-      setIssuedMsg("Admin wallet required to view issued certificates.");
+      setIssuedMsg("Only the organization wallet can view issued certificates.");
       setIssuedList([]);
       setIssuedLoaded(true);
       return;
     }
     if (!localRegistry || !hasNamedOrg) {
-      setIssuedMsg("Select a named organization to view issued certificates.");
+      setIssuedMsg("Select an organization to view issued certificates.");
       setIssuedList([]);
       setIssuedLoaded(true);
       return;
@@ -734,10 +757,10 @@ export default function Issue() {
         const credentialId = getParsedEventField(event, ["credential_id", "credentialId"]);
         if (!credentialId) continue;
         items.push({ id: credentialId, recipient, context: context || "" });
-        if (items.length >= ISSUED_PREVIEW_LIMIT) break;
       }
 
       setIssuedList(items);
+      setIssuedPage(1);
 
       const scopeLabel = contextFilter ? "this program" : "this organization";
       let summary = items.length
@@ -754,6 +777,11 @@ export default function Issue() {
       setIssuedLoaded(true);
     }
   }, [account, client, contextId, hasNamedOrg, isIssuer, localRegistry, orgCreatedAtMs, registryIssuer, walletAddress]);
+
+  useEffect(() => {
+    if (!account || !isIssuer || !hasNamedOrg || issuedLoaded) return;
+    loadIssuedCertificates();
+  }, [account, hasNamedOrg, isIssuer, issuedLoaded, loadIssuedCertificates]);
 
   async function issueCredentialsBulk() {
     if (!account || !issuerCapId) return;
@@ -898,115 +926,122 @@ export default function Issue() {
   }
 
   const issueSidebarTarget = typeof document !== "undefined" ? document.getElementById("issue-sidebar") : null;
+  const issueStatusTarget = typeof document !== "undefined" ? document.getElementById("issue-status") : null;
+  const shortTx = lastTx ? formatShortId(lastTx) : "";
   const issueSidebar = (
     <>
       {showProgramHistoryPanel && (
         <div className="card">
           <h3 style={{ marginTop: 0 }}>Program history</h3>
           <p className="small">Use past programs as templates when you want to reissue a familiar setup.</p>
-          <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowProgramHistory((prev) => !prev)}>
-            {showProgramHistory ? "Hide history" : "Show history"}
+          <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={!account || !isIssuer || isHistoryLoading} onClick={loadProgramHistory}>
+            {isHistoryLoading ? "Loading history..." : historyLoaded ? "Refresh history" : "Load history"}
           </button>
-          {showProgramHistory && (
-            <div style={{ marginTop: 12 }}>
-              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={!account || !isIssuer || isHistoryLoading} onClick={loadProgramHistory}>
-                {isHistoryLoading ? "Loading history..." : historyLoaded ? "Refresh history" : "Load history"}
-              </button>
-              {!isIssuer && <p className="small" style={{ marginTop: 8 }}>Connect an admin wallet to load history.</p>}
-              {historyMsg && (
-                <p className="small" style={{ marginTop: 8 }}>
-                  {historyMsg}
-                </p>
-              )}
-              {historyLoaded && !isHistoryLoading && programHistory.length === 0 && !historyMsg && (
-                <p className="small" style={{ marginTop: 8 }}>
-                  No history available for this organization yet.
-                </p>
-              )}
-              {programHistory.length > 0 && (
-                <div className="cards-grid" style={{ marginTop: 12 }}>
-                  {programHistory.map((item) => (
-                    <div key={item.id} className="card">
-                      <h4 style={{ margin: 0 }}>{item.title}</h4>
-                      {item.description && (
-                        <p className="small" style={{ marginTop: 6 }}>
-                          {item.description}
-                        </p>
-                      )}
-                      <p className="small" style={{ marginTop: 8 }}>
-                        Issued so far: <span className="badge">{item.issuedCount}</span>
-                      </p>
-                      <p className="small">Program ID</p>
-                      <pre>{item.id}</pre>
-                      <button
-                        className="btn secondary"
-                        style={{ padding: "6px 10px", fontSize: 12 }}
-                        onClick={() => {
-                          setContextId(item.id);
-                          setCtxTitle(item.title);
-                          setCtxDesc(item.description || "");
-                          setPrefillEnabled(false);
-                          setIsProgramLocked(true);
-                          setShowProgramHistory(false);
-                          setMsg("Program selected. You can issue certificates now.");
-                        }}
-                      >
-                        Use this program
-                      </button>
-                    </div>
-                  ))}
+          {!isIssuer && <p className="small" style={{ marginTop: 8 }}>Connect the organization wallet to load history.</p>}
+          {historyMsg && (
+            <p className="small" style={{ marginTop: 8 }}>
+              {historyMsg}
+            </p>
+          )}
+          {historyLoaded && !isHistoryLoading && programHistory.length === 0 && !historyMsg && (
+            <p className="small" style={{ marginTop: 8 }}>
+              No history available for this organization yet.
+            </p>
+          )}
+          {historyPageItems.length > 0 && (
+            <div className="cards-grid" style={{ marginTop: 12 }}>
+              {historyPageItems.map((item) => (
+                <div key={item.id} className="card">
+                  <h4 style={{ margin: 0 }}>{item.title}</h4>
+                  {item.description && (
+                    <p className="small" style={{ marginTop: 6 }}>
+                      {item.description}
+                    </p>
+                  )}
+                  <p className="small" style={{ marginTop: 8 }}>
+                    Issued so far: <span className="badge">{item.issuedCount}</span>
+                  </p>
+                  <button
+                    className="btn secondary"
+                    style={{ padding: "6px 10px", fontSize: 12 }}
+                    onClick={() => {
+                      setContextId(item.id);
+                      setCtxTitle(item.title);
+                      setCtxDesc(item.description || "");
+                      setPrefillEnabled(false);
+                      setIsProgramLocked(true);
+                      setMsg("Program selected. You can issue certificates now.");
+                    }}
+                  >
+                    Use this program
+                  </button>
                 </div>
-              )}
+              ))}
+            </div>
+          )}
+          {historyTotalPages > 1 && (
+            <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={historyPageSafe <= 1} onClick={() => setHistoryPage((prev) => Math.max(1, prev - 1))}>
+                Prev
+              </button>
+              <span className="small">Page {historyPageSafe} of {historyTotalPages}</span>
+              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={historyPageSafe >= historyTotalPages} onClick={() => setHistoryPage((prev) => Math.min(historyTotalPages, prev + 1))}>
+                Next
+              </button>
             </div>
           )}
         </div>
       )}
       <div className="card" style={{ marginTop: 12 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-          <h3 style={{ margin: 0 }}>Recent issued certificates</h3>
-          <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowIssuedList((prev) => !prev)}>
-            {showIssuedList ? "Hide list" : "Show list"}
+          <h3 style={{ margin: 0 }}>Recent certificates issued</h3>
+          <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={!account || !isIssuer || isIssuedLoading} onClick={loadIssuedCertificates}>
+            {isIssuedLoading ? "Loading list..." : issuedLoaded ? "Refresh list" : "Load list"}
           </button>
         </div>
-        {showIssuedList && (
-          <div style={{ marginTop: 12 }}>
-            <p className="small">
-              Best-effort list from recent events for {contextId ? "this program" : "this organization"}.
+        <div style={{ marginTop: 12 }}>
+          <p className="small">Latest results for {contextId ? "this program" : "this organization"}.</p>
+          {!isIssuer && <p className="small" style={{ marginTop: 8 }}>Connect the organization wallet to load issued certificates.</p>}
+          {issuedMsg && (
+            <p className="small" style={{ marginTop: 8 }}>
+              {issuedMsg}
             </p>
-            <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={!account || !isIssuer || isIssuedLoading} onClick={loadIssuedCertificates}>
-              {isIssuedLoading ? "Loading list..." : issuedLoaded ? "Refresh list" : "Load list"}
-            </button>
-            {!isIssuer && <p className="small" style={{ marginTop: 8 }}>Connect an admin wallet to load issued certificates.</p>}
-            {issuedMsg && (
-              <p className="small" style={{ marginTop: 8 }}>
-                {issuedMsg}
-              </p>
-            )}
-            {issuedLoaded && !isIssuedLoading && issuedList.length === 0 && !issuedMsg && (
-              <p className="small" style={{ marginTop: 8 }}>
-                No issued certificates for this organization yet.
-              </p>
-            )}
-            {issuedList.length > 0 && (
-              <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
-                {issuedList.map((item) => (
-                  <div key={item.id} style={{ border: "1px solid var(--stroke)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.6)" }}>
-                    <p className="small" style={{ margin: 0 }}>Recipient</p>
-                    <pre style={{ marginTop: 6 }}>{item.recipient || "(unknown)"}</pre>
-                    <p className="small" style={{ marginTop: 6 }}>Certificate ID</p>
-                    <pre style={{ marginTop: 6 }}>{item.id}</pre>
-                    {item.context && (
-                      <>
-                        <p className="small" style={{ marginTop: 6 }}>Program</p>
-                        <pre style={{ marginTop: 6 }}>{item.context}</pre>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+          )}
+          {issuedLoaded && !isIssuedLoading && issuedList.length === 0 && !issuedMsg && (
+            <p className="small" style={{ marginTop: 8 }}>
+              No issued certificates for this organization yet.
+            </p>
+          )}
+          {issuedPageItems.length > 0 && (
+            <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+              {issuedPageItems.map((item) => (
+                <div key={item.id} style={{ border: "1px solid var(--stroke)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.6)" }}>
+                  <p className="small" style={{ margin: 0 }}>Recipient</p>
+                  <pre style={{ marginTop: 6 }}>{item.recipient || "(unknown)"}</pre>
+                  <p className="small" style={{ marginTop: 6 }}>Certificate ID</p>
+                  <pre style={{ marginTop: 6 }}>{item.id}</pre>
+                  {item.context && (
+                    <>
+                      <p className="small" style={{ marginTop: 6 }}>Program</p>
+                      <pre style={{ marginTop: 6 }}>{item.context}</pre>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {issuedTotalPages > 1 && (
+            <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={issuedPageSafe <= 1} onClick={() => setIssuedPage((prev) => Math.max(1, prev - 1))}>
+                Prev
+              </button>
+              <span className="small">Page {issuedPageSafe} of {issuedTotalPages}</span>
+              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} disabled={issuedPageSafe >= issuedTotalPages} onClick={() => setIssuedPage((prev) => Math.min(issuedTotalPages, prev + 1))}>
+                Next
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </>
   );
@@ -1014,15 +1049,13 @@ export default function Issue() {
   return (
     <>
       <div className="card">
-      <h2 style={{ marginTop: 0 }}>Issue Certificates (Admin)</h2>
-      <p className="small">Start by creating an organization. Once approved, you can issue certificates.</p>
+      <h2 style={{ marginTop: 0 }}>Issue certificates</h2>
+      <p className="small">Create your organization and issue certificates.</p>
 
       {!account ? (
         <p className="small">Connect your wallet to get started.</p>
       ) : (
-        <p className="small">
-          Connected wallet: <span className="badge">{account.address}</span>
-        </p>
+        <p className="small">Wallet connected.</p>
       )}
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
@@ -1037,13 +1070,10 @@ export default function Issue() {
             Step 3: Issue
           </button>
         </div>
-        <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={resetWorkflow}>
-          Reset workflow
+        <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowAdvancedModal(true)}>
+          Advanced options
         </button>
       </div>
-      <p className="small" style={{ marginTop: 6 }}>
-        Complete each step to unlock the next.
-      </p>
 
       <div className="steps" style={{ marginTop: 12 }}>
         {activeStep === 1 && (
@@ -1052,9 +1082,8 @@ export default function Issue() {
               <div className="step-number">1</div>
               <div className="step-meta">
                 <h3 className="step-title">Organization setup</h3>
-                <p className="step-desc">Create the issuer profile that can publish certificates.</p>
+                <p className="step-desc">Create the organization profile that will issue certificates.</p>
               </div>
-              <span className={`badge ${adminReady ? "ok" : ""}`}>{adminReady ? "Ready" : "Needs setup"}</span>
             </div>
 
             <div style={{ marginTop: 12 }}>
@@ -1062,10 +1091,6 @@ export default function Issue() {
                 <div className="card" style={{ padding: 12 }}>
                   <p className="small" style={{ margin: 0 }}>Current organization</p>
                   <p style={{ marginTop: 6, fontWeight: 600 }}>{currentOrgName}</p>
-                  <pre style={{ marginTop: 8 }}>{localRegistry}</pre>
-                  <button className="btn secondary" style={{ marginTop: 8, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Organization ID", localRegistry)}>
-                    Copy organization ID
-                  </button>
                 </div>
               )}
               {!hasNamedOrg && (
@@ -1074,38 +1099,11 @@ export default function Issue() {
                   <p className="small" style={{ marginTop: 8 }}>
                     {hasLegacyOrg
                       ? isIssuer
-                        ? "A previous organization was found, but it has no name yet. Add a name below."
+                        ? "A previous organization was found, but it has no name yet. Add a name in advanced options."
                         : "A previous organization was found, but it has no name. Create a new organization to continue."
                       : isIssuer
                         ? "This wallet already has an organization profile. Paste the organization ID in advanced options to link it here."
                         : "No organization linked yet."}
-                  </p>
-                </div>
-              )}
-
-              {localRegistry && !hasNamedOrg && (
-                <div style={{ marginTop: 12 }}>
-                  <label className="small">Set organization name (one-time)</label>
-                  <input
-                    value={orgNameDraft}
-                    disabled={!canSetOrgName || registryQuery.isPending}
-                    onChange={(e) => {
-                      setOrgNameDraft(e.target.value);
-                    }}
-                    placeholder="e.g., Acme Academy"
-                  />
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                    <button className="btn" disabled={!canSetOrgName || !orgNameDraft.trim() || isPending || isOrgRenaming} onClick={updateOrgName}>
-                      Save name
-                    </button>
-                  </div>
-                  {!canSetOrgName && (
-                    <p className="small" style={{ marginTop: 6 }}>
-                      Only the issuing wallet can set the organization name.
-                    </p>
-                  )}
-                  <p className="small" style={{ marginTop: 6 }}>
-                    This is stored on-chain and cannot be edited later.
                   </p>
                 </div>
               )}
@@ -1117,9 +1115,6 @@ export default function Issue() {
                       Create a new organization
                     </button>
                   )}
-                  <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowOrgAdvanced((prev) => !prev)}>
-                    {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
-                  </button>
                 </div>
                 {isIssuer && !showOrgCreate && (
                   <p className="small" style={{ marginTop: 8 }}>
@@ -1130,7 +1125,7 @@ export default function Issue() {
                   <div style={{ marginTop: 8 }}>
                     <label className="small">Organization name</label>
                     <input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="e.g., Acme Academy" />
-                    <p className="small">Used when creating a new organization profile. It does not rename an existing one.</p>
+                    <p className="small">Used when creating a new organization profile. Creating it costs a network fee. You can edit it later in advanced options.</p>
 
                     <button className="btn" disabled={!account || isPending || !orgName.trim()} onClick={createIssuer}>
                       Create organization profile
@@ -1146,13 +1141,6 @@ export default function Issue() {
                       >
                         Hide
                       </button>
-                      <button
-                        className="btn secondary"
-                        style={{ padding: "6px 10px", fontSize: 12 }}
-                        onClick={() => setShowOrgAdvanced((prev) => !prev)}
-                      >
-                        {showOrgAdvanced ? "Hide advanced options" : "Advanced options"}
-                      </button>
                     </div>
                   </div>
                 )}
@@ -1161,26 +1149,6 @@ export default function Issue() {
               {capQuery.isPending && <p className="small">Checking admin access...</p>}
             </div>
 
-            {showOrgAdvanced && (
-              <div style={{ marginTop: 12 }}>
-                <label className="small">Organization ID (shared list)</label>
-                <input
-                  value={localRegistry}
-                  onChange={(e) => {
-                    setLocalRegistry(e.target.value);
-                    setRegistryId(e.target.value);
-                  }}
-                  placeholder="0x... organization id"
-                />
-                <p className="small">Current organization ID: {localRegistry ? <span className="badge">{localRegistry}</span> : <span className="badge">not set</span>}</p>
-                {localRegistry && (
-                  <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Organization ID", localRegistry)}>
-                    Copy organization ID
-                  </button>
-                )}
-                <p className="small">Use this only if you are switching browsers or accounts.</p>
-              </div>
-            )}
 
             <div className="step-actions">
               <button className="btn" disabled={!step2Enabled} onClick={() => setActiveStep(2)}>
@@ -1197,9 +1165,6 @@ export default function Issue() {
               <div className="step-meta">
                 <h3 className="step-title">Create a program</h3>
                 <p className="step-desc">Programs group certificates for an event or course.</p>
-                <p className="small" style={{ marginTop: 6 }}>
-                  Status: {batchReady ? "Ready" : "Not set"}
-                </p>
               </div>
             </div>
 
@@ -1251,37 +1216,6 @@ export default function Issue() {
               ) : (
                 <p className="small">Create a new program when you want a fresh set of certificates.</p>
               )}
-
-              <div style={{ marginTop: 12 }}>
-                <p className="small">Program saved in this browser: {contextId ? <span className="badge ok">Yes</span> : <span className="badge">Not yet</span>}</p>
-                <button className="btn secondary" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => setShowProgramAdvanced((prev) => !prev)}>
-                  {showProgramAdvanced ? "Hide advanced options" : "Advanced options"}
-                </button>
-              </div>
-
-              {showProgramAdvanced && (
-                <div style={{ marginTop: 12 }}>
-                  <label className="small">Program ID</label>
-                  <input
-                    value={contextId}
-                    readOnly={isProgramLocked}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      setContextId(next);
-                      setPrefillEnabled(false);
-                      setIsProgramLocked(!!next);
-                    }}
-                    placeholder="0x... program id"
-                  />
-                  <p className="small">Current program ID: {contextId ? <span className="badge">{contextId}</span> : <span className="badge">not set</span>}</p>
-                  {contextId && (
-                    <button className="btn" style={{ marginTop: 6, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Program ID", contextId)}>
-                      Copy program ID
-                    </button>
-                  )}
-                  <p className="small">Use this only if you are switching browsers or accounts.</p>
-                </div>
-              )}
             </div>
 
             <div className="step-actions">
@@ -1303,7 +1237,6 @@ export default function Issue() {
                 <h3 className="step-title">Issue certificates</h3>
                 <p className="step-desc">Add recipients, attach a file, and issue in bulk.</p>
               </div>
-              <span className={`badge ${issueReady ? "ok" : ""}`}>{issueReady ? "Ready" : "Waiting for details"}</span>
             </div>
 
             <div style={{ marginTop: 12 }}>
@@ -1399,39 +1332,6 @@ export default function Issue() {
                 </p>
               )}
 
-              <div style={{ marginTop: 12 }}>
-                <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowIssueAdvanced((prev) => !prev)}>
-                  {showIssueAdvanced ? "Hide advanced options" : "Advanced options"}
-                </button>
-              </div>
-
-              {showIssueAdvanced && (
-                <div style={{ marginTop: 12 }}>
-                  <label className="small">Group size (recipients per approval)</label>
-                  <input type="number" min={1} max={50} value={chunkSize} onChange={(e) => setChunkSize(Math.max(1, Number(e.target.value) || 1))} />
-                  <p className="small">Smaller groups are safer but require more wallet approvals.</p>
-
-                  <label className="small" style={{ marginTop: 12, display: "block" }}>
-                    Additional allowed wallets (optional)
-                  </label>
-                  <textarea rows={3} value={extraAccessInput} onChange={(e) => setExtraAccessInput(e.target.value)} placeholder="Paste extra recipients" />
-                  {invalidAccess.length > 0 && (
-                    <p className="small">
-                      Invalid allowlist entries: {invalidAccess.slice(0, 5).join(", ")}
-                      {invalidAccess.length > 5 ? "..." : ""}
-                    </p>
-                  )}
-                  <p className="small">Recipients can always open the attachment. Add extra wallets only if needed.</p>
-                  <p className="small">This gate hides the download button in the app. Anyone with the link can still access the file.</p>
-
-                  <label className="small" style={{ marginTop: 12, display: "block" }}>
-                    Attachment link (advanced)
-                  </label>
-                  <input value={docRef} onChange={(e) => setDocRef(e.target.value)} placeholder="Paste an existing attachment link" />
-                  <p className="small">Use this only if you already have a link and do not want to upload.</p>
-                </div>
-              )}
-
               {bulkProgress && (
                 <p className="small" style={{ marginTop: 8 }}>
                   Progress: {bulkProgress.completed}/{bulkProgress.total} (chunk {bulkProgress.chunk}/{bulkProgress.chunks})
@@ -1453,18 +1353,137 @@ export default function Issue() {
         )}
       </div>
 
-      {(msg || lastTx) && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ marginTop: 0 }}>Status</h3>
-          {msg && <p>{msg}</p>}
-          {lastTx && (
-            <p className="small">
-              Last transaction: <span className="badge">{lastTx}</span>
-            </p>
-          )}
+      </div>
+      {showAdvancedModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,25,27,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            zIndex: 50,
+          }}
+        >
+          <div className="card" style={{ maxWidth: 540, width: "100%" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <h3 style={{ margin: 0 }}>Advanced options</h3>
+              <button className="btn secondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setShowAdvancedModal(false)}>
+                Close
+              </button>
+            </div>
+            <p className="small" style={{ marginTop: 8 }}>IDs and bulk settings live here.</p>
+
+            <details open style={{ marginTop: 16, border: "1px solid var(--stroke)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.4)" }}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>Organization</summary>
+              <div style={{ marginTop: 12 }}>
+                <label className="small">Organization ID</label>
+                <input
+                  value={localRegistry}
+                  onChange={(e) => {
+                    setLocalRegistry(e.target.value);
+                    setRegistryId(e.target.value);
+                  }}
+                  placeholder="0x... organization id"
+                />
+                {localRegistry && (
+                  <button className="btn secondary" style={{ marginTop: 8, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Organization ID", localRegistry)}>
+                    Copy organization ID
+                  </button>
+                )}
+                <p className="small" style={{ marginTop: 6 }}>Use this only if you are switching browsers or accounts.</p>
+                {localRegistry ? (
+                  <div style={{ marginTop: 12 }}>
+                    <label className="small">Organization name</label>
+                    <input
+                      value={orgNameDraft}
+                      disabled={!canSetOrgName || registryQuery.isPending}
+                      onChange={(e) => {
+                        setOrgNameDraft(e.target.value);
+                      }}
+                      placeholder="e.g., Acme Academy"
+                    />
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                      <button
+                        className="btn"
+                        disabled={!canSetOrgName || !orgNameDraft.trim() || isPending || isOrgRenaming || orgNameDraft.trim() === currentOrgName.trim()}
+                        onClick={updateOrgName}
+                      >
+                        {currentOrgName ? "Save changes" : "Save name"}
+                      </button>
+                    </div>
+                    {!canSetOrgName && (
+                      <p className="small" style={{ marginTop: 6 }}>
+                        Only the issuing wallet can edit the organization name.
+                      </p>
+                    )}
+                    <p className="small" style={{ marginTop: 6 }}>
+                      Saving changes costs a network fee.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="small" style={{ marginTop: 8 }}>
+                    Paste an organization ID to edit the name.
+                  </p>
+                )}
+              </div>
+            </details>
+
+            <details style={{ marginTop: 12, border: "1px solid var(--stroke)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.4)" }}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>Program</summary>
+              <div style={{ marginTop: 12 }}>
+                <label className="small">Program ID</label>
+                <input
+                  value={contextId}
+                  readOnly={isProgramLocked}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setContextId(next);
+                    setPrefillEnabled(false);
+                    setIsProgramLocked(!!next);
+                  }}
+                  placeholder="0x... program id"
+                />
+                {contextId && (
+                  <button className="btn secondary" style={{ marginTop: 8, padding: "6px 10px", fontSize: 12 }} onClick={() => copyToClipboard("Program ID", contextId)}>
+                    Copy program ID
+                  </button>
+                )}
+                <p className="small" style={{ marginTop: 6 }}>Use this only if you are switching browsers or accounts.</p>
+              </div>
+            </details>
+
+            <details style={{ marginTop: 12, border: "1px solid var(--stroke)", borderRadius: 12, padding: 12, background: "rgba(255,255,255,0.4)" }}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>Issuing</summary>
+              <div style={{ marginTop: 12 }}>
+                <label className="small">Batch size (per approval)</label>
+                <input type="number" min={1} max={50} value={chunkSize} onChange={(e) => setChunkSize(Math.max(1, Number(e.target.value) || 1))} />
+                <p className="small">Smaller batches are safer but need more approvals.</p>
+
+                <label className="small" style={{ marginTop: 12, display: "block" }}>
+                  Extra viewers (optional)
+                </label>
+                <textarea rows={3} value={extraAccessInput} onChange={(e) => setExtraAccessInput(e.target.value)} placeholder="Paste wallet addresses" />
+                {invalidAccess.length > 0 && (
+                  <p className="small">
+                    Invalid entries: {invalidAccess.slice(0, 5).join(", ")}
+                    {invalidAccess.length > 5 ? "..." : ""}
+                  </p>
+                )}
+                <p className="small">Recipients can always open the attachment. Extra viewers can see the download button in this app.</p>
+
+                <label className="small" style={{ marginTop: 12, display: "block" }}>
+                  Attachment link (optional)
+                </label>
+                <input value={docRef} onChange={(e) => setDocRef(e.target.value)} placeholder="Paste an existing attachment link" />
+                <p className="small">Use this if you already have a link and do not want to upload.</p>
+              </div>
+            </details>
+          </div>
         </div>
       )}
-      </div>
       {showSuccessModal && (
         <div
           style={{
@@ -1488,6 +1507,17 @@ export default function Issue() {
         </div>
       )}
       {issueSidebarTarget && createPortal(issueSidebar, issueSidebarTarget)}
+      {issueStatusTarget && (msg || lastTx) && createPortal(
+        <div className="hero-status-content" title={msg || undefined}>
+          {msg && <span className="status-text">{msg}</span>}
+          {lastTx && (
+            <span className="status-pill" title={lastTx}>
+              Tx {shortTx}
+            </span>
+          )}
+        </div>,
+        issueStatusTarget
+      )}
     </>
   );
 }

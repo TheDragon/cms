@@ -109,7 +109,6 @@ module credential_framework::credentials {
     ) {
         assert_issuer(cap, ctx);
         assert!(registry.issuer == cap.issuer, E_REGISTRY_ISSUER_MISMATCH);
-        assert!(string::length(&registry.name) == 0, E_REGISTRY_NAME_LOCKED);
         assert!(string::length(&name) > 0, E_REGISTRY_NAME_EMPTY);
         registry.name = name;
     }

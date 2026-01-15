@@ -10,18 +10,27 @@ export const MODULE = (import.meta.env.VITE_MODULE || "credentials") as string;
 export const WALRUS_UPLOAD_URL = import.meta.env.VITE_WALRUS_UPLOAD_URL as string | undefined;
 export const WALRUS_VIEW_URL = import.meta.env.VITE_WALRUS_VIEW_URL as string | undefined;
 
-// Single ABC issuer registry (shared object). You can set via .env or let the app store it in localStorage once.
-const REGISTRY_STORAGE_KEY = "IBRIZ_REGISTRY_ID";
+// Single ABC issuer registry (shared object). Versioned by network + package to avoid stale cache on redeploys.
+const REGISTRY_STORAGE_PREFIX = "IBRIZ_REGISTRY_ID";
+const LEGACY_REGISTRY_STORAGE_KEY = REGISTRY_STORAGE_PREFIX;
+const REGISTRY_STORAGE_KEY = `${REGISTRY_STORAGE_PREFIX}:${NETWORK}:${PACKAGE_ID}`;
+
+function clearLegacyRegistryCache() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(LEGACY_REGISTRY_STORAGE_KEY);
+}
 
 export function getRegistryId(): string {
   const fromEnv = import.meta.env.VITE_REGISTRY_ID as string | undefined;
   if (fromEnv) return fromEnv;
   if (typeof window === "undefined") return "";
+  clearLegacyRegistryCache();
   return localStorage.getItem(REGISTRY_STORAGE_KEY) || "";
 }
 
 export function setRegistryId(value: string) {
   if (typeof window === "undefined") return;
+  clearLegacyRegistryCache();
   if (!value) {
     localStorage.removeItem(REGISTRY_STORAGE_KEY);
     return;
